@@ -274,6 +274,28 @@ def _preflight_compression(
     _compression_cooldown = getattr(
         _compressor, "get_active_compression_failure_cooldown", lambda: None
     )()
+    # Async-threshold: adopt a finished background summary or arm a new one WITHOUT
+    # blocking. 'armed'/'pending' skip the blocking chain this turn (the worker owns
+    # the session compression lease while it runs).
+    from agent.turn_async_compaction import run_async_compaction_step
+
+    _async_action, _async_messages = run_async_compaction_step(
+        agent, out.messages, _preflight_tokens,
+        system_message=system_message, task_id=effective_task_id,
+    )
+    if _async_action == "adopted":
+        out.messages = _async_messages
+        out.conversation_history = conversation_history_after_compression(
+            agent, out.messages, out.conversation_history
+        )
+        _reset_retry_state_after_compaction(agent)
+        out.compressed = True
+        # Re-estimate; the guard chain below re-decides on the shrunken list.
+        _preflight_tokens = _tc._preflight_request_tokens(
+            agent, out.messages, out.active_system_prompt or ""
+        )
+    elif _async_action in ("armed", "pending"):
+        return
 
     _should_compress_now = False
     _compress_block_reason = None

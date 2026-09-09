@@ -90,12 +90,28 @@ def run_preflight_compression(
         and len(v.messages) > 1
         and v.compression_attempts < max_compression_attempts
     )
+    # Async-threshold: adopt a finished background summary or arm one without
+    # blocking; while a worker is pending the blocking branch must not fire.
+    from agent.turn_async_compaction import run_async_compaction_step
+
+    _async_action, _async_messages = run_async_compaction_step(
+        agent, v.messages, request_pressure_tokens,
+        system_message=system_message, task_id=effective_task_id,
+    )
+    _async_skip_blocking = _async_action in ("adopted", "armed", "pending")
+    if _async_action == "adopted":
+        v.messages = _async_messages
+        v.conversation_history = conversation_history_after_compression(
+            agent, v.messages, v.conversation_history
+        )
+        _reset_retry_state_after_compaction(agent)
     if (
         _eligible
         and not _review_fork_first_request_pending(agent)
         and (not v._preflight_compression_blocked or provider_overflow_preflight)
         and (not defer_preflight(request_pressure_tokens) or provider_overflow_preflight)
         and not _compression_cooldown
+        and not _async_skip_blocking
         and compressor.should_compress(request_pressure_tokens)
     ):
         # Managed local runtime: grow the context window before compressing (last
@@ -285,12 +301,29 @@ def compress_after_tool_results(
             estimate_request_tokens_rough(messages, tools=agent.tools or None),
         )
 
+    # Async-threshold: adopt a finished background summary or arm one without
+    # blocking; while a worker is pending the blocking branch must not fire.
+    from agent.turn_async_compaction import run_async_compaction_step
+
+    _async_action, _async_messages = run_async_compaction_step(
+        agent, messages, _real_tokens,
+        system_message=system_message, task_id=effective_task_id,
+    )
+    _async_skip_blocking = _async_action in ("adopted", "armed", "pending")
+    if _async_action == "adopted":
+        messages = _async_messages
+        conversation_history = conversation_history_after_compression(
+            agent, messages, conversation_history
+        )
+        _reset_retry_state_after_compaction(agent)
+
     if (
         agent.compression_enabled
         and compression_attempts < max_compression_attempts
         and not bool(
             getattr(_compressor, "awaiting_real_usage_after_compression", False)
         )
+        and not _async_skip_blocking
         and _compressor.should_compress(_real_tokens)
     ):
         compression_attempts += 1

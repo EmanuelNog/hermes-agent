@@ -150,6 +150,29 @@ class _Recovery(OverflowVerdict):
         from agent.conversation_loop import _COMPRESSION_TIMEOUT_FINAL_RESPONSE, _compression_deferred_result
 
         agent = self.agent
+        # Async-threshold first: a finished background summary satisfies the
+        # overflow without a blocking pass; a pending worker owns the lease, so
+        # defer softly (mirror the lock-skip path below) instead of forcing a
+        # competing compression.
+        from agent.turn_async_compaction import run_async_compaction_step
+
+        _async_action, _async_messages = run_async_compaction_step(
+            agent, self.messages, request_tokens,
+            system_message=self.system_message, task_id=self.effective_task_id,
+        )
+        if _async_action == "adopted":
+            self.messages = _async_messages
+            self.conversation_history = conversation_history_after_compression(
+                agent, self.messages, self.conversation_history
+            )
+            return None
+        if _async_action == "pending":
+            self.compression_attempts -= 1
+            deferred = _compression_deferred_result(
+                agent, self.messages, self.api_call_count
+            )
+            agent._persist_session(self.messages, self.conversation_history)
+            return self.done("return", deferred)
         before = self.messages
         self.messages, self.active_system_prompt = agent._compress_context(
             before, self.system_message, approx_tokens=request_tokens,

@@ -1336,6 +1336,20 @@ def route_classified_error(
         compression_attempts += 1
         if compression_attempts <= max_compression_attempts:
             original_len = len(messages)
+            # Async-threshold: adopt a finished background summary before forcing a
+            # blocking pass on this provider-proven overflow.
+            from agent.turn_async_compaction import run_async_compaction_step
+
+            _async_action, _async_messages = run_async_compaction_step(
+                agent, messages,
+                estimate_request_tokens_rough(api_messages, tools=agent.tools or None),
+                system_message=system_message, task_id=effective_task_id,
+            )
+            if _async_action == "adopted":
+                messages = _async_messages
+                conversation_history = conversation_history_after_compression(
+                    agent, messages, conversation_history
+                )
             # Overhead-aware request size so recovery arms on the true request
             # (msgs + tools + system), not the tool-blind message count.
             messages, active_system_prompt = agent._compress_context(
