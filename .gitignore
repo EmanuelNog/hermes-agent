@@ -226,3 +226,4 @@ native/fts5_cjk/*.so
 *.db
 .beads-credential-key
 .beads/proxieddb/
+venv
