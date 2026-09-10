@@ -86,6 +86,12 @@ def can_arm_async(agent: Any, messages: List[dict], tokens: int) -> Tuple[bool, 
     # double-compact the same window. Keep the classic blocking fallback, kill async.
     if getattr(agent, "codex_responses_native_compaction", False):
         return False, "responses_native"
+    # Rotation mode (compression.in_place=false): the worker rotates session_id at
+    # commit and may re-read the durable parent ("grew before lease"), absorbing
+    # rows the main thread flushed after arming — writes would land on the archived
+    # parent and the seam could duplicate. Keep rotation on the blocking path only.
+    if not getattr(agent, "compression_in_place", True):
+        return False, "rotation_mode"
     margin = float(getattr(agent, "compression_async_margin", 0.0) or 0.0)
     if margin <= 0:
         return False, "margin_zero"
@@ -145,7 +151,21 @@ def adopt_async_result(
         return live_messages, False, "prefix_diverged"
     if len(result_messages) == n and result_messages == snap:
         return live_messages, False, "worker_noop"
-    return result_messages + live_messages[n:], True, None
+    spliced = result_messages + live_messages[n:]
+    # Seam-dedupe safety net: when the worker's commit re-read the durable parent
+    # and absorbed freshly-flushed suffix rows into its tail (rotation-mode "grew
+    # before lease"), the live suffix repeats them. Drop the maximal exact overlap
+    # between the result's tail and the suffix's head — a no-op in the common
+    # case, and only ever strips an exact continuation (never mid-list repeats).
+    suffix = live_messages[n:]
+    overlap = 0
+    for k in range(min(len(result_messages), len(suffix)), 0, -1):
+        if result_messages[-k:] == suffix[:k]:
+            overlap = k
+            break
+    if overlap:
+        spliced = result_messages + suffix[overlap:]
+    return spliced, True, None
 
 
 def launch_async_compression(

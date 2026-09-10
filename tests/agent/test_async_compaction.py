@@ -140,6 +140,14 @@ def test_ballot_no_arm_with_responses_native():
     assert not ok and reason == "responses_native"
 
 
+def test_ballot_no_arm_in_rotation_mode():
+    # in_place=false: the worker rotates session_id at commit and may absorb
+    # freshly-flushed suffix rows; async is refused, blocking path stays.
+    a = _agent(compression_in_place=False)
+    ok, reason = tac.can_arm_async(a, _arm_msgs(), tokens=4_600)
+    assert not ok and reason == "rotation_mode"
+
+
 def test_pending_session_mismatch_clears_state():
     # A stale worker from a previous session must be dropped, not adopted.
     agent = _agent(session_id="new-session")
@@ -180,6 +188,44 @@ def test_adoption_splices_suffix_after_worker_result():
     assert adopted and reason is None
     assert new_msgs[:4] == result[0]
     assert new_msgs[4:] == live[40:]
+
+
+def test_adoption_dedupes_grew_before_lease_seam():
+    # Rotation-mode "grew before lease": the worker's result tail absorbed the
+    # freshly-flushed suffix rows, so the live suffix repeats them. The split must
+    # drop the exact continuation, keeping only genuinely-new rows.
+    live_arm = _arm_msgs(n=40, persisted=True)
+    state = SimpleNamespace(snapshot=list(live_arm), arm_index=40, result=None)
+    s0 = {"role": "user", "content": "suffix-0"}
+    s1 = {"role": "tool", "content": "suffix-1"}
+    s2 = {"role": "user", "content": "suffix-2-new"}
+    live = list(live_arm) + [s0, s1, s2]
+    # result tail = snapshot tail + absorbed copies of s0, s1
+    result = (
+        [{"role": "system", "content": "sys"},
+         {"role": "user", "content": "[CONTEXT COMPACTION] summary"}] + live_arm[38:40] + [s0, s1],
+        "system-prompt",
+    )
+    new_msgs, adopted, _ = tac.adopt_async_result(live, state, result)
+    assert adopted
+    assert new_msgs == result[0] + [s2]
+    assert new_msgs.count(s0) == 1 and new_msgs.count(s1) == 1
+
+
+def test_adoption_keeps_distinct_live_tail_when_no_absorb():
+    # Without durable absorption the dedupe is a no-op: distinct suffix rows stay.
+    live_arm = _arm_msgs(n=40, persisted=True)
+    state = SimpleNamespace(snapshot=list(live_arm), arm_index=40, result=None)
+    s0 = {"role": "user", "content": "brand-new-a"}
+    s1 = {"role": "tool", "content": "brand-new-b"}
+    live = list(live_arm) + [s0, s1]
+    result = (
+        [{"role": "system", "content": "sys"},
+         {"role": "user", "content": "[CONTEXT COMPACTION] summary"}],
+        "system-prompt",
+    )
+    new_msgs, adopted, _ = tac.adopt_async_result(live, state, result)
+    assert adopted and new_msgs == result[0] + [s0, s1]
 
 
 def test_adoption_no_growth_replaces_fully():
