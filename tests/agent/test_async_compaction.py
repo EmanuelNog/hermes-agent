@@ -124,6 +124,33 @@ def test_ballot_no_arm_when_disabled():
     assert not ok
 
 
+def test_ballot_no_arm_on_codex_app_server():
+    # The codex agent owns its thread; async must not arm a compaction the
+    # codex_app_server_auto policy would never sanction.
+    a = _agent(api_mode="codex_app_server")
+    ok, reason = tac.can_arm_async(a, _arm_msgs(), tokens=4_600)
+    assert not ok and reason == "codex_app_server"
+
+
+def test_ballot_no_arm_with_responses_native():
+    # Server-side Responses compaction owns the window; a local async prefetch
+    # would double-compact it.
+    a = _agent(codex_responses_native_compaction=True)
+    ok, reason = tac.can_arm_async(a, _arm_msgs(), tokens=4_600)
+    assert not ok and reason == "responses_native"
+
+
+def test_pending_session_mismatch_clears_state():
+    # A stale worker from a previous session must be dropped, not adopted.
+    agent = _agent(session_id="new-session")
+    agent.async_compaction_pending = SimpleNamespace(
+        session_id="old-session", fence=object(), future=None,
+    )
+    action, msgs = tac.run_async_compaction_step(agent, _arm_msgs(), 4_600)
+    assert action == "none" and msgs is not None
+    assert agent.async_compaction_pending is None
+
+
 # ---------------------------------------------------------------------------
 # Adoption (snapshot result + grown live tail)
 # ---------------------------------------------------------------------------

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any, List, Optional, Tuple
@@ -75,6 +76,16 @@ def can_arm_async(agent: Any, messages: List[dict], tokens: int) -> Tuple[bool, 
     """Ballot for arming the async worker at the current token level."""
     if not getattr(agent, "compression_enabled", False):
         return False, "disabled"
+    # Codex app-server threads are owned by the codex agent; Hermes must never start
+    # compression for them outside the codex_app_server_auto policy (compress_context
+    # would route to the app-server's thread compaction behind that switch).
+    if getattr(agent, "api_mode", None) == "codex_app_server":
+        return False, "codex_app_server"
+    # Server-side Responses compaction (gpt-5.6) compacts at ~threshold - 8K with its
+    # own opaque checkpoints; a local async prefetch at margin below threshold would
+    # double-compact the same window. Keep the classic blocking fallback, kill async.
+    if getattr(agent, "codex_responses_native_compaction", False):
+        return False, "responses_native"
     margin = float(getattr(agent, "compression_async_margin", 0.0) or 0.0)
     if margin <= 0:
         return False, "margin_zero"
@@ -195,6 +206,13 @@ def launch_async_compression(
         session_id=getattr(agent, "session_id", None),
     )
     agent.async_compaction_pending = state
+    # Publish the fence so hard_interrupt() (/stop) can cancel this worker
+    # pre-commit, mirroring the blocking facade's registration.
+    fence_registration_lock = vars(agent).setdefault(
+        "_compression_commit_fence_lock", threading.RLock()
+    )
+    with fence_registration_lock:
+        agent._active_compression_commit_fence = fence
     logger.info(
         "Async-threshold compression armed at ~%s tokens (threshold %s, margin %s, context %s) "
         "session %s",
@@ -205,6 +223,22 @@ def launch_async_compression(
         getattr(agent, "session_id", None) or "none",
     )
     return state
+
+
+def _clear_pending_state(agent: Any) -> None:
+    """Drop the pending state and unregister OUR published fence.
+
+    Only removes the fence when it is still ours — a newer pass (blocking
+    compress, another async arm) publishes its own over it and must stay.
+    """
+    state = getattr(agent, "async_compaction_pending", None)
+    agent.async_compaction_pending = None
+    if state is not None:
+        fence = getattr(state, "fence", None)
+        if fence is not None:
+            with vars(agent).setdefault("_compression_commit_fence_lock", threading.RLock()):
+                if vars(agent).get("_active_compression_commit_fence") is fence:
+                    vars(agent).pop("_active_compression_commit_fence", None)
 
 
 def run_async_compaction_step(
@@ -235,10 +269,10 @@ def run_async_compaction_step(
     # Pending worker: check session identity first (a stale worker from a
     # previous session must never be adopted).
     if getattr(state, "session_id", None) not in (None, getattr(agent, "session_id", None)):
-        agent.async_compaction_pending = None
+        _clear_pending_state(agent)
         return "none", messages
     if state.future.done():
-        agent.async_compaction_pending = None
+        _clear_pending_state(agent)
         try:
             result = state.future.result()
         except Exception as exc:  # worker raised after done() — cooldown already recorded
@@ -272,7 +306,7 @@ def run_async_compaction_step(
                 wait_budget,
             )
             return "pending", messages
-        agent.async_compaction_pending = None
+        _clear_pending_state(agent)
         new_messages, adopted, reason = adopt_async_result(messages, state, result)
         if adopted:
             agent._last_compaction_in_place = bool(getattr(agent, "compression_in_place", True))
