@@ -316,16 +316,22 @@ def run_async_compaction_step(
     thr = int(getattr(agent.context_compressor, "threshold_tokens", 0) or 0)
     action = decide_threshold_action(True, False, tokens, thr)
     if action == "await":
+        from concurrent.futures import TimeoutError as _FutureTimeoutError
+
         wait_budget = min(max(float(getattr(state, "idle_timeout", 0.0)) * 2.0, 5.0), 60.0)
         try:
             result = state.future.result(timeout=wait_budget)
-        except Exception:
+        except _FutureTimeoutError:
             logger.info(
                 "Async-threshold worker still running after %.0fs at threshold; "
                 "degrading (blocking pass will lock-skip on its lease)",
                 wait_budget,
             )
             return "pending", messages
+        except Exception as exc:  # worker failed hard: clear state, allow the blocking path
+            logger.warning("Async-threshold worker failed while awaited: %s", exc)
+            _clear_pending_state(agent)
+            return "none", messages
         _clear_pending_state(agent)
         new_messages, adopted, reason = adopt_async_result(messages, state, result)
         if adopted:
