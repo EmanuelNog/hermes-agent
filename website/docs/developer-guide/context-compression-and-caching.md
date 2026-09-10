@@ -169,9 +169,9 @@ compression:
   #   "claude-sonnet": 0.35  # overrides" below.
   target_ratio: 0.20         # How much of threshold to keep as tail (default: 0.20)
   tail_mode: lean            # Tail retention policy: lean | legacy (default: lean)
-  async_margin: 0.0          # Fraction of the window below threshold at which the
+  prefetch_margin: 0.0          # Fraction of the window below threshold at which the
                              # summary worker is armed WITHOUT blocking the loop
-                             # (0 = disabled; see "Async-threshold compaction" below)
+                             # (0 = disabled; see "Prefetch compaction" below)
   protect_last_n: 20         # Minimum protected tail messages (default: 20)
   min_tail_user_messages: 1  # Real user messages guaranteed in the tail (default: 1)
   codex_gpt55_autoraise: true  # gpt-5.5 on Codex OAuth: raise trigger to 85% (default: true)
@@ -201,7 +201,7 @@ auxiliary:
 | `min_tail_user_messages` | `1` | ≥1 | Minimum number of REAL (actionable) user messages guaranteed to survive in the uncompressed tail. `1` = the existing single last-user anchor (behavior-preserving default). Raise to e.g. `3` to keep the last 3 real user turns verbatim even when bulky tool outputs fill the tail token budget. Blank platform echoes, compaction handoffs, and synthetic continuation rows never count toward N. The guarantee wins over the tail token budget — the tail may exceed the budget when the anchor pulls the cut back |
 | `protect_first_n` | `3` | (hardcoded) | System prompt + first exchange always preserved |
 | `idle_compact_after_seconds` | `0` | ≥0 seconds | Opt-in: compact up front when a session resumes after this many seconds idle (0 = disabled). Skips when context ≤ threshold × target_ratio; honors cooldown/anti-thrash/lock guards |
-| `async_margin` | `0.0` | `0.0`–`1.0` | Fraction of the context window subtracted from the blocking threshold: when prompt tokens reach `threshold_tokens − margin × context_length`, the summary worker is launched in the background (same pool/fence/commit machinery as blocking compaction) and the loop keeps executing; the finished result is adopted at the next gate, splicing the rows that grew after arming. The blocking path is untouched — at/above the threshold a pending worker is awaited within the normal budgets, otherwise the classic blocking pass runs. 0 = disabled. Auto in-loop compaction only: manual `/compress`, gateway session hygiene, and Codex native/Responses compaction are unaffected |
+| `prefetch_margin` | `0.0` | `0.0`–`1.0` | Fraction of the context window subtracted from the blocking threshold: when prompt tokens reach `threshold_tokens − margin × context_length`, the summary worker is launched in the background (same pool/fence/commit machinery as blocking compaction) and the loop keeps executing; the finished result is adopted at the next gate, splicing the rows that grew after arming. The blocking path is untouched — at/above the threshold a pending worker is awaited within the normal budgets, otherwise the classic blocking pass runs. 0 = disabled. Auto in-loop compaction only: manual `/compress`, gateway session hygiene, and Codex native/Responses compaction are unaffected |
 | `codex_gpt55_autoraise` | `true` | bool | Raise the trigger to 85% for gpt-5.4/5.5/5.6 and gpt-6 Astra on the ChatGPT Codex OAuth route (see below). Set `false` to keep the global `threshold` |
 | `codex_gpt55_autoraise_notice` | `true` | bool | Show the one-time Codex gpt-5.5 autoraise notice. Set `false` to keep the 85% autoraise but suppress the banner |
 | `codex_app_server_auto` | `native` | `native`, `hermes`, `off` | Thread-compaction mode for Codex app-server sessions (see below) |

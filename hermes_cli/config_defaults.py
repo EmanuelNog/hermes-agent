@@ -557,10 +557,10 @@ DEFAULT_CONFIG = {
         # `protect_last_n`. Built-in compressor only. Each committed prune rewrites sent history and
         # breaks the prompt-cache prefix — the min_reclaim gate below keeps those breaks episodic.
         "proactive_prune_tokens": 0,
-        # async_margin: fraction of the context WINDOW subtracted from the blocking
+        # prefetch_margin: fraction of the context WINDOW subtracted from the blocking
         # threshold — at threshold - margin*context the summary worker is armed in the
         # BACKGROUND without stopping the loop (adopted at the next gate). 0 = disabled.
-        "async_margin": 0.0,
+        "prefetch_margin": 0.0,
         # Prune's summarize pass only touches tool results larger than this (chars); clamped >= 200
         # so a generated summary can't be re-summarized.
         "proactive_prune_min_result_chars": 8000,

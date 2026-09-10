@@ -1,6 +1,6 @@
-"""Async-threshold compaction (hermes-async-cwg): non-blocking summary prefetch.
+"""Prefetch compaction (hermes-async-cwg): non-blocking summary prefetch.
 
-When the transcript reaches ``threshold_tokens - async_margin * context_length``
+When the transcript reaches ``threshold_tokens - prefetch_margin * context_length``
 (margin as a fraction of the WINDOW, default 0 = disabled), the summary worker
 is launched WITHOUT blocking the loop. The loop keeps executing; at a later gate
 the finished result is adopted: the worker's compacted prefix plus the live list
@@ -41,7 +41,7 @@ def _persisted_marker() -> str:
     return _DB_PERSISTED_MARKER_CACHE
 
 
-def async_trigger_tokens(compressor: Any, margin: float) -> Optional[int]:
+def prefetch_trigger_tokens(compressor: Any, margin: float) -> Optional[int]:
     """Prompt-token level that arms the async worker; None when disabled.
 
     ``margin`` is a fraction of the context WINDOW subtracted from the blocking
@@ -72,7 +72,7 @@ def region_fully_persisted(messages: List[dict]) -> bool:
     return True
 
 
-def can_arm_async(agent: Any, messages: List[dict], tokens: int) -> Tuple[bool, Optional[str]]:
+def can_prefetch(agent: Any, messages: List[dict], tokens: int) -> Tuple[bool, Optional[str]]:
     """Ballot for arming the async worker at the current token level."""
     if not getattr(agent, "compression_enabled", False):
         return False, "disabled"
@@ -92,20 +92,20 @@ def can_arm_async(agent: Any, messages: List[dict], tokens: int) -> Tuple[bool, 
     # parent and the seam could duplicate. Keep rotation on the blocking path only.
     if not getattr(agent, "compression_in_place", True):
         return False, "rotation_mode"
-    margin = float(getattr(agent, "compression_async_margin", 0.0) or 0.0)
+    margin = float(getattr(agent, "compression_prefetch_margin", 0.0) or 0.0)
     if margin <= 0:
         return False, "margin_zero"
-    if getattr(agent, "async_compaction_pending", None) is not None:
+    if getattr(agent, "prefetch_compaction_pending", None) is not None:
         return False, "already_pending"
     compressor = getattr(agent, "context_compressor", None)
     if compressor is None:
         return False, "no_compressor"
-    trigger = async_trigger_tokens(compressor, margin)
+    trigger = prefetch_trigger_tokens(compressor, margin)
     if trigger is None:
         return False, "no_trigger"
     thr = int(getattr(compressor, "threshold_tokens", 0) or 0)
     if tokens < trigger or tokens >= thr:
-        return False, "not_in_async_band"
+        return False, "not_in_prefetch_band"
     cooldown = getattr(compressor, "get_active_compression_failure_cooldown", None)
     if callable(cooldown) and cooldown():
         return False, "failure_cooldown"
@@ -129,7 +129,7 @@ def decide_threshold_action(
     return "adopt" if pending_done else "await"
 
 
-def adopt_async_result(
+def adopt_prefetch_result(
     live_messages: List[dict], state: Any, result: Any,
 ) -> Tuple[List[dict], bool, Optional[str]]:
     """Splice a finished worker result onto the live list.
@@ -168,18 +168,18 @@ def adopt_async_result(
     return spliced, True, None
 
 
-def launch_async_compression(
+def launch_prefetch_compression(
     agent: Any, messages: List[dict], system_message: str, tokens: int,
     task_id: str = "default",
 ) -> Optional[Any]:
     """Submit the snapshot worker on the shared compression pool WITHOUT awaiting.
 
-    Returns the pending state (stored on ``agent.async_compaction_pending``) or
+    Returns the pending state (stored on ``agent.prefetch_compaction_pending``) or
     None when the pool is saturated. The worker deep-copies the frozen shallow
     snapshot and runs ``compress_context`` with its own commit fence (durable
     SessionDB mutation happens on the worker; the main thread never touches it).
     """
-    if getattr(agent, "async_compaction_pending", None) is not None:
+    if getattr(agent, "prefetch_compaction_pending", None) is not None:
         return None
     from agent.conversation_compression import (
         CompressionCommitFence,
@@ -190,7 +190,7 @@ def launch_async_compression(
     )
     if not _try_admit_compression_job():
         logger.warning(
-            "Async-threshold compression: pool saturated — skipping arm this cycle (session %s)",
+            "Prefetch compression: pool saturated — skipping arm this cycle (session %s)",
             getattr(agent, "session_id", None) or "none",
         )
         return None
@@ -201,7 +201,7 @@ def launch_async_compression(
     snapshot = list(messages)
     arm_index = len(messages)
 
-    def _async_worker(worker_fence: CompressionCommitFence) -> Tuple[list, str]:
+    def _prefetch_worker(worker_fence: CompressionCommitFence) -> Tuple[list, str]:
         if worker_fence.deadline_exceeded or worker_fence.is_cancelled:
             return messages, ""
         from agent.conversation_compression import compress_context
@@ -214,7 +214,7 @@ def launch_async_compression(
     from tools.thread_context import propagate_context_to_thread
     try:
         future = _get_compress_timeout_executor().submit(
-            propagate_context_to_thread(_async_worker), fence
+            propagate_context_to_thread(_prefetch_worker), fence
         )
     except BaseException:
         _release_compression_admission()
@@ -225,7 +225,7 @@ def launch_async_compression(
         armed_tokens=tokens, started_at=time.monotonic(), idle_timeout=float(idle_timeout),
         session_id=getattr(agent, "session_id", None),
     )
-    agent.async_compaction_pending = state
+    agent.prefetch_compaction_pending = state
     # Publish the fence so hard_interrupt() (/stop) can cancel this worker
     # pre-commit, mirroring the blocking facade's registration.
     fence_registration_lock = vars(agent).setdefault(
@@ -234,11 +234,11 @@ def launch_async_compression(
     with fence_registration_lock:
         agent._active_compression_commit_fence = fence
     logger.info(
-        "Async-threshold compression armed at ~%s tokens (threshold %s, margin %s, context %s) "
+        "Prefetch compression armed at ~%s tokens (threshold %s, margin %s, context %s) "
         "session %s",
         f"{tokens:,}",
         f"{int(getattr(agent.context_compressor, 'threshold_tokens', 0) or 0):,}",
-        f"{float(getattr(agent, 'compression_async_margin', 0.0) or 0.0):g}",
+        f"{float(getattr(agent, 'compression_prefetch_margin', 0.0) or 0.0):g}",
         f"{int(getattr(agent.context_compressor, 'context_length', 0) or 0):,}",
         getattr(agent, "session_id", None) or "none",
     )
@@ -251,8 +251,8 @@ def _clear_pending_state(agent: Any) -> None:
     Only removes the fence when it is still ours — a newer pass (blocking
     compress, another async arm) publishes its own over it and must stay.
     """
-    state = getattr(agent, "async_compaction_pending", None)
-    agent.async_compaction_pending = None
+    state = getattr(agent, "prefetch_compaction_pending", None)
+    agent.prefetch_compaction_pending = None
     if state is not None:
         fence = getattr(state, "fence", None)
         if fence is not None:
@@ -261,11 +261,11 @@ def _clear_pending_state(agent: Any) -> None:
                     vars(agent).pop("_active_compression_commit_fence", None)
 
 
-def run_async_compaction_step(
+def run_prefetch_compaction_step(
     agent: Any, messages: List[dict], tokens: int, *, system_message: Any = "",
     task_id: str = "default",
 ) -> Tuple[str, List[dict]]:
-    """One async-threshold step at a gate. Returns ``(action, messages)``.
+    """One prefetch step at a gate. Returns ``(action, messages)``.
 
     actions:
       'adopted' — a pending worker finished and its result was spliced; the
@@ -276,12 +276,12 @@ def run_async_compaction_step(
                   or block on a competing compression this pass).
       'none'    — nothing to do; the normal (blocking) path applies.
     """
-    state = getattr(agent, "async_compaction_pending", None)
+    state = getattr(agent, "prefetch_compaction_pending", None)
     if state is None:
-        can, _reason = can_arm_async(agent, messages, tokens)
+        can, _reason = can_prefetch(agent, messages, tokens)
         if not can:
             return "none", messages
-        launched = launch_async_compression(
+        launched = launch_prefetch_compression(
             agent, messages, system_message, tokens, task_id=task_id
         )
         return ("armed" if launched is not None else "none"), messages
@@ -296,20 +296,20 @@ def run_async_compaction_step(
         try:
             result = state.future.result()
         except Exception as exc:  # worker raised after done() — cooldown already recorded
-            logger.warning("Async-threshold worker failed: %s", exc)
+            logger.warning("Prefetch worker failed: %s", exc)
             return "none", messages
-        new_messages, adopted, reason = adopt_async_result(messages, state, result)
+        new_messages, adopted, reason = adopt_prefetch_result(messages, state, result)
         if adopted:
             agent._last_compaction_in_place = bool(getattr(agent, "compression_in_place", True))
             logger.info(
-                "Async-threshold compaction adopted: %d -> %d messages, %d live suffix rows kept "
+                "Prefetch compaction adopted: %d -> %d messages, %d live suffix rows kept "
                 "(session %s)",
                 len(state.snapshot), len(new_messages), len(messages) - len(state.snapshot),
                 getattr(agent, "session_id", None) or "none",
             )
             return "adopted", new_messages
         if reason:
-            logger.info("Async-threshold result discarded (%s)", reason)
+            logger.info("Prefetch result discarded (%s)", reason)
         return "none", messages
 
     # Still running: threshold-hit policy — bounded wait once, then degrade.
@@ -323,21 +323,21 @@ def run_async_compaction_step(
             result = state.future.result(timeout=wait_budget)
         except _FutureTimeoutError:
             logger.info(
-                "Async-threshold worker still running after %.0fs at threshold; "
+                "Prefetch worker still running after %.0fs at threshold; "
                 "degrading (blocking pass will lock-skip on its lease)",
                 wait_budget,
             )
             return "pending", messages
         except Exception as exc:  # worker failed hard: clear state, allow the blocking path
-            logger.warning("Async-threshold worker failed while awaited: %s", exc)
+            logger.warning("Prefetch worker failed while awaited: %s", exc)
             _clear_pending_state(agent)
             return "none", messages
         _clear_pending_state(agent)
-        new_messages, adopted, reason = adopt_async_result(messages, state, result)
+        new_messages, adopted, reason = adopt_prefetch_result(messages, state, result)
         if adopted:
             agent._last_compaction_in_place = bool(getattr(agent, "compression_in_place", True))
             return "adopted", new_messages
         if reason:
-            logger.info("Async-threshold result discarded after await (%s)", reason)
+            logger.info("Prefetch result discarded after await (%s)", reason)
         return "none", messages
     return "pending", messages
