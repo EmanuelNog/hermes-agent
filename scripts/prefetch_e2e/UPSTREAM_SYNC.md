@@ -1,5 +1,15 @@
 # Fork ↔ upstream sync
 
+## Published fork
+
+- **Public fork:** https://github.com/EmanuelNog/hermes-agent — feature branch
+  `prefetch-compression` (pushed 2026-09-11), anchor tag `upstream-port/2026-09-11`.
+- **Local remote:** `fork` = `git@github.com:EmanuelNog/hermes-agent.git`
+  (`git push fork prefetch-compression upstream-port/<date>` to refresh).
+- **PR link (when wanted):**
+  https://github.com/NousResearch/hermes-agent/compare/main...EmanuelNog:hermes-agent:prefetch-compression?expand=1
+  — the review doc `website/docs/developer-guide/prefetch-compression.md` is the description.
+
 ## Remotes (configured 2026-09-11)
 
 - `origin` = `/home/agentuser/.hermes/hermes-agent` — local main checkout, refreshed

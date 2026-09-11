@@ -1,7 +1,8 @@
 # Prefetch Compression (non-blocking automatic compaction)
 
-Status: proposal / patch under review. Currently maintained as a version-locked fork
-patch; this document is the review copy.
+Status: proposal / patch under review. Public fork + branch:
+[github.com/EmanuelNog/hermes-agent](https://github.com/EmanuelNog/hermes-agent)
+(branch `prefetch-compression`); this document is the review copy.
 
 Source files: `agent/turn_prefetch_compaction.py` (new), `agent/turn_preflight.py`,
 `agent/turn_context_compaction.py`, `agent/turn_overflow.py`, `agent/turn_recovery.py`,
