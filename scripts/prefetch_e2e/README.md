@@ -7,6 +7,7 @@ behaviour (arm -> keep working -> adopt across turns) against the dev profiles
 `asyncdev` (small-scale, 64K window) and `asyncbig` (big-scale, 1M window).
 
 Run after every upstream fetch, once the compat suite is green.
+**Upstream update procedure: see `UPSTREAM_SYNC.md` (shallow-repo delta port + checklist).**
 
 ## Small-scale (minutes): profile `asyncdev`
 
