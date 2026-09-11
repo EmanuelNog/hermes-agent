@@ -227,3 +227,7 @@ native/fts5_cjk/*.so
 .beads-credential-key
 .beads/proxieddb/
 venv
+
+# coverage.py artifacts
+.coverage
+.coverage.*

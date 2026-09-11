@@ -70,6 +70,11 @@ def _agent(**overrides):
     a = SimpleNamespace(**attrs)
     a.context_compressor = _compressor()
     a.context_compressor.get_active_compression_failure_cooldown = lambda: None
+    # Status recorders (mirror StatusOutputMixin's native surfaces).
+    a.status_events = []
+    a._emit_status = lambda m: a.status_events.append(("lifecycle", m))
+    a._emit_status_kind = lambda kind, msg, *, origin=None: a.status_events.append((kind, msg))
+    a._emit_warning = lambda m: a.status_events.append(("warn", m))
     return a
 
 
@@ -182,6 +187,8 @@ def test_done_failure_discards_state_and_allows_blocking():
     action, _msgs = tac.run_prefetch_compaction_step(agent, _arm_msgs(), 5_200)
     assert action == "none"
     assert agent.prefetch_compaction_pending is None
+    # Failure-class notice with the elapsed time.
+    assert any(k == "warn" and "Prefetch compaction failed after" in m for k, m in agent.status_events)
 
 
 class _DuckFuture:
@@ -214,6 +221,7 @@ def test_await_branch_failure_clears_state():
     action, _msgs = tac.run_prefetch_compaction_step(agent, _arm_msgs(), 5_200)
     assert action == "none"
     assert agent.prefetch_compaction_pending is None
+    assert any(k == "warn" and "Prefetch compaction failed after" in m for k, m in agent.status_events)
 
 
 def test_await_branch_timeout_keeps_pending():
@@ -462,6 +470,10 @@ def test_launch_arms_publishes_fence_and_releases_admission(monkeypatch):
     assert st["calls"][0]["approx_tokens"] == 4_600
     assert st["calls"][0]["task_id"] == "t1"
     assert st["calls"][0]["commit_fence"] is state.fence
+    # Native-style start report for the user.
+    assert [k for k, _ in agent.status_events] == ["lifecycle"]
+    _k, _m = agent.status_events[0]
+    assert "Compacting context (prefetch)" in _m and "~4,600 tokens" in _m
 
 
 def test_launch_refused_when_already_pending(monkeypatch):
@@ -477,6 +489,7 @@ def test_launch_refused_when_pool_saturated(monkeypatch):
     assert tac.launch_prefetch_compression(agent, _arm_msgs(), "s", 4_600) is None
     assert st["calls"] == []
     assert st["released"] == 0  # never admitted -> nothing to release
+    assert agent.status_events == []  # refusals are silent, natively
 
 
 def test_step_arm_then_adopt_end_to_end(monkeypatch):
@@ -500,6 +513,10 @@ def test_step_arm_then_adopt_end_to_end(monkeypatch):
     assert agent.prefetch_compaction_pending is None
     assert agent._last_compaction_in_place is True
     assert not hasattr(agent, "_active_compression_commit_fence")  # fence unregistered
+    # Start + terminal edge reported in native registers (counts + duration).
+    kinds = [k for k, _ in agent.status_events]
+    assert kinds == ["lifecycle", "compacted"]
+    assert "40 → 1 messages in 0s" in agent.status_events[1][1]
 
 
 def test_clear_pending_state_fence_ownership():
@@ -615,6 +632,28 @@ def test_step_none_when_ballot_refuses():
     assert action == "none" and out is msgs
 
 
+# ---------------------------------------------------------------------------
+# Duration formatting for the user-facing reports
+# ---------------------------------------------------------------------------
+
+
+def test_elapsed_seconds_uses_finished_and_clamps():
+    assert tac._prefetch_elapsed_seconds(
+        SimpleNamespace(started_at=100.0, finished_at=110.6)
+    ) == 11
+    # Clock skew / missing stamps must never produce a negative or raise.
+    assert tac._prefetch_elapsed_seconds(
+        SimpleNamespace(started_at=110.0, finished_at=100.0)
+    ) == 0
+    assert tac._prefetch_elapsed_seconds(SimpleNamespace()) == 0
+
+
+def test_elapsed_seconds_tolerates_garbage_start():
+    assert tac._prefetch_elapsed_seconds(
+        SimpleNamespace(started_at="garbage", finished_at=100.0)
+    ) == 0
+
+
 def test_done_branch_discards_diverged_result(monkeypatch):
     _fake_cc(monkeypatch, result=([{"role": "user", "content": "compact"}], "s"))
     agent = _agent()
@@ -624,6 +663,8 @@ def test_done_branch_discards_diverged_result(monkeypatch):
     action, out = tac.run_prefetch_compaction_step(agent, msgs, 4_600)
     assert action == "none" and out is msgs
     assert agent.prefetch_compaction_pending is None
+    # Start was reported; the stale discard itself is silent (no done, no failure).
+    assert [k for k, _ in agent.status_events] == ["lifecycle"]
 
 
 class _DuckReturns:
@@ -655,6 +696,7 @@ def test_await_branch_adopts_completed_result():
     assert action == "adopted" and out == result[0]
     assert agent.prefetch_compaction_pending is None
     assert agent._last_compaction_in_place is True
+    assert any(k == "compacted" and "Prefetch compaction complete" in m for k, m in agent.status_events)
 
 
 def test_await_branch_discards_failed_adoption():
@@ -670,3 +712,5 @@ def test_await_branch_discards_failed_adoption():
     action, out = tac.run_prefetch_compaction_step(agent, msgs, 5_200)
     assert action == "none" and out is msgs
     assert agent.prefetch_compaction_pending is None
+    # A stale discard is silent, natively (no done, no failure notice).
+    assert agent.status_events == []

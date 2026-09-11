@@ -3,9 +3,9 @@
 
 Restore-safe: every tool row is properly paired (assistant carries tool_calls,
 tool row carries tool_call_id) so no alternation repair drops rows. Target
-start-of-resume total ~23.1-23.3K tokens: under the async arm point (23,360 =
-threshold 24,000 - margin 0.01*64K) so the resume turn's own tool growth
-crosses it mid-turn.
+start-of-resume total ~22.5K tokens: under the async arm point (30,400 =
+threshold_tokens 40,000 - margin 0.15*64K) so the resume turn's own tool
+growth crosses it mid-turn.
 """
 import os
 import sys

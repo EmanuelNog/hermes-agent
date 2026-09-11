@@ -129,6 +129,56 @@ def decide_threshold_action(
     return "adopt" if pending_done else "await"
 
 
+# ---------------------------------------------------------------------------
+# User-facing lifecycle reports (native status registers)
+# ---------------------------------------------------------------------------
+
+
+def _prefetch_elapsed_seconds(state: Any) -> int:
+    """Whole seconds the worker ran (arm -> completion); 0 when unknowable."""
+    finished = getattr(state, "finished_at", None)
+    if finished is None:
+        finished = time.monotonic()
+    try:
+        return max(0, int(round(finished - float(getattr(state, "started_at", finished) or finished))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _report_prefetch_start(agent: Any, tokens: int) -> None:
+    """Tell the user a background summary is running (routine lifecycle line)."""
+    from agent.conversation_compression import PREFETCH_COMPACTION_STATUS_TEMPLATE
+
+    agent._emit_status(PREFETCH_COMPACTION_STATUS_TEMPLATE.format(tokens=max(0, int(tokens))))
+
+
+def _report_prefetch_done(agent: Any, state: Any, new_messages: List[dict]) -> None:
+    """Terminal edge: what was compacted, how many rows, and how long it took."""
+    from agent.conversation_compression import PREFETCH_COMPACTION_DONE_STATUS_TEMPLATE
+
+    agent._emit_status_kind(
+        "compacted",
+        PREFETCH_COMPACTION_DONE_STATUS_TEMPLATE.format(
+            before=len(getattr(state, "snapshot", None) or []),
+            after=len(new_messages),
+            seconds=_prefetch_elapsed_seconds(state),
+        ),
+        origin="prefetch_compaction",
+    )
+
+
+def _report_prefetch_failure(agent: Any, state: Any, exc: BaseException) -> None:
+    """Failure-class notice — never suppressed on chat platforms."""
+    from agent.conversation_compression import PREFETCH_COMPACTION_FAILED_TEMPLATE
+
+    reason = " ".join(str(exc).split()) or type(exc).__name__
+    agent._emit_warning(
+        PREFETCH_COMPACTION_FAILED_TEMPLATE.format(
+            seconds=_prefetch_elapsed_seconds(state), reason=reason[:160],
+        )
+    )
+
+
 def adopt_prefetch_result(
     live_messages: List[dict], state: Any, result: Any,
 ) -> Tuple[List[dict], bool, Optional[str]]:
@@ -222,10 +272,14 @@ def launch_prefetch_compression(
     future.add_done_callback(_release_compression_admission)
     state = SimpleNamespace(
         future=future, fence=fence, snapshot=snapshot, arm_index=arm_index,
-        armed_tokens=tokens, started_at=time.monotonic(), idle_timeout=float(idle_timeout),
+        armed_tokens=tokens, started_at=time.monotonic(), finished_at=None,
+        idle_timeout=float(idle_timeout),
         session_id=getattr(agent, "session_id", None),
     )
     agent.prefetch_compaction_pending = state
+    # Stamp true worker completion for the reported duration; fires on the
+    # worker thread when compress_context returns (or raises).
+    future.add_done_callback(lambda _f: setattr(state, "finished_at", time.monotonic()))
     # Publish the fence so hard_interrupt() (/stop) can cancel this worker
     # pre-commit, mirroring the blocking facade's registration.
     fence_registration_lock = vars(agent).setdefault(
@@ -242,6 +296,7 @@ def launch_prefetch_compression(
         f"{int(getattr(agent.context_compressor, 'context_length', 0) or 0):,}",
         getattr(agent, "session_id", None) or "none",
     )
+    _report_prefetch_start(agent, tokens)
     return state
 
 
@@ -297,6 +352,7 @@ def run_prefetch_compaction_step(
             result = state.future.result()
         except Exception as exc:  # worker raised after done() — cooldown already recorded
             logger.warning("Prefetch worker failed: %s", exc)
+            _report_prefetch_failure(agent, state, exc)
             return "none", messages
         new_messages, adopted, reason = adopt_prefetch_result(messages, state, result)
         if adopted:
@@ -307,6 +363,7 @@ def run_prefetch_compaction_step(
                 len(state.snapshot), len(new_messages), len(messages) - len(state.snapshot),
                 getattr(agent, "session_id", None) or "none",
             )
+            _report_prefetch_done(agent, state, new_messages)
             return "adopted", new_messages
         if reason:
             logger.info("Prefetch result discarded (%s)", reason)
@@ -330,12 +387,14 @@ def run_prefetch_compaction_step(
             return "pending", messages
         except Exception as exc:  # worker failed hard: clear state, allow the blocking path
             logger.warning("Prefetch worker failed while awaited: %s", exc)
+            _report_prefetch_failure(agent, state, exc)
             _clear_pending_state(agent)
             return "none", messages
         _clear_pending_state(agent)
         new_messages, adopted, reason = adopt_prefetch_result(messages, state, result)
         if adopted:
             agent._last_compaction_in_place = bool(getattr(agent, "compression_in_place", True))
+            _report_prefetch_done(agent, state, new_messages)
             return "adopted", new_messages
         if reason:
             logger.info("Prefetch result discarded after await (%s)", reason)

@@ -68,6 +68,22 @@ COMPACTION_HEARTBEAT_STATUS = f"🗜️ {COMPACTION_STATUS_MARKER} — still sum
 
 COMPACTION_DONE_STATUS = "✓ Context compaction complete — continuing turn..."
 
+# Prefetch (background) compaction lifecycle — same registers as the blocking
+# statuses above. Start/complete are ROUTINE progress (suppressed on chat
+# surfaces by gateway _TELEGRAM_NOISY_STATUS_RE; deliverable with the opt-in
+# compression.progress_notices), the FAILURE line is a failure-class notice and
+# must stay visible. Keep {placeholders} numeric-only: the gateway derives
+# suppression regexes from these templates via _status_template_to_regex.
+PREFETCH_COMPACTION_STATUS_TEMPLATE = (
+    "🗜️ Compacting context (prefetch) — summarizing ~{tokens:,} tokens in the background so I can keep working..."
+)
+PREFETCH_COMPACTION_DONE_STATUS_TEMPLATE = (
+    "✓ Prefetch compaction complete — {before} → {after} messages in {seconds}s, continuing..."
+)
+PREFETCH_COMPACTION_FAILED_TEMPLATE = (
+    "⚠ Prefetch compaction failed after {seconds}s ({reason}) — continuing without it."
+)
+
 
 def _strip_marker_for_comparison(msgs: Any) -> Any:
     """Copy ``msgs`` with the ``_db_persisted`` marker removed for no-op comparison.
@@ -132,6 +148,8 @@ ROUTINE_COMPRESSION_STATUS_SAMPLES = (
     COMPRESSION_RETRY_MESSAGES_STATUS_TEMPLATE.format(before=30, after=12),
     COMPRESSION_RETRY_TOKENS_STATUS_TEMPLATE.format(before=250000, after=120000),
     COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE.format(new_ctx=120000, old_ctx=250000),
+    PREFETCH_COMPACTION_STATUS_TEMPLATE.format(tokens=120000),
+    PREFETCH_COMPACTION_DONE_STATUS_TEMPLATE.format(before=30, after=12, seconds=42),
 )
 
 

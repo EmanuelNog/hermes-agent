@@ -195,3 +195,34 @@ def test_agent_attr_wiring_contract():
         "agent.compression_prefetch_margin — the module would silently see the "
         "0.0 default and never arm."
     )
+
+
+def test_gateway_noise_classification_contract():
+    """Prefetch lifecycle lines must classify natively on chat surfaces.
+
+    Routine start/complete are suppressed like their blocking siblings (and
+    deliverable only with the opt-in compression.progress_notices); the failure
+    line is failure-class and must stay visible. The TUI progress classifier
+    tags the start line, never the done line.
+    """
+    cc = pytest.importorskip("agent.conversation_compression")
+    gw = pytest.importorskip("gateway.run")
+
+    start = cc.PREFETCH_COMPACTION_STATUS_TEMPLATE.format(tokens=123456)
+    done = cc.PREFETCH_COMPACTION_DONE_STATUS_TEMPLATE.format(before=30, after=12, seconds=42)
+    fail = cc.PREFETCH_COMPACTION_FAILED_TEMPLATE.format(seconds=42, reason="boom")
+
+    assert gw._TELEGRAM_NOISY_STATUS_RE.search(start), (
+        "PREFETCH-FORK DRIFT: start line no longer suppressed on chat surfaces."
+    )
+    assert gw._TELEGRAM_NOISY_STATUS_RE.search(done), (
+        "PREFETCH-FORK DRIFT: done line no longer suppressed on chat surfaces."
+    )
+    assert gw._COMPRESSION_PROGRESS_STATUS_RE.search(start)
+    assert gw._COMPRESSION_PROGRESS_STATUS_RE.search(done)
+    assert not gw._TELEGRAM_NOISY_STATUS_RE.search(fail), (
+        "PREFETCH-FORK DRIFT: failure line became suppressible — it must stay visible."
+    )
+    assert not gw._COMPRESSION_PROGRESS_STATUS_RE.search(fail)
+    assert cc.is_compaction_progress_status(start) is True
+    assert cc.is_compaction_progress_status(done) is False
