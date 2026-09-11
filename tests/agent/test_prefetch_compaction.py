@@ -1,10 +1,8 @@
-"""RED contracts for prefetch compaction (bead hermes-async-cwg.2).
+"""Behaviour contracts for prefetch compaction (bead hermes-async-cwg).
 
-These tests define the behaviour of the prefetch state machine BEFORE
-it exists: trigger maths, the arming ballot, snapshot adoption with a grown
-live tail, staleness discard, and the threshold-hit policy. They must fail
-against the current checkout (module ``agent.turn_prefetch_compaction`` does not
-exist yet) and go green with the implementation (hermes-async-cwg.3).
+Trigger maths, the arming ballot, in-process arming -> adoption, staleness
+discard, the threshold-hit policy, and fence ownership. The upstream seams this
+module leans on are pinned separately in test_prefetch_upstream_compat.py.
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ import pytest
 
 from agent.context_compressor import _DB_PERSISTED_MARKER
 
-import agent.turn_prefetch_compaction as tac  # noqa: F401  (RED: module missing)
+import agent.turn_prefetch_compaction as tac
 
 
 # ---------------------------------------------------------------------------
@@ -30,11 +28,6 @@ def _compressor(*, context_length=64_000, threshold_tokens=5_120):
 def test_trigger_disabled_when_margin_zero():
     # margin 0.0 = feature off; no trigger exists -> arming can never fire.
     assert tac.prefetch_trigger_tokens(_compressor(), 0.0) is None
-
-
-def test_trigger_is_threshold_minus_margin_of_window():
-    # user spec: threshold 8% of 64K = 5120; margin 0.01 -> arm at 4480 (7%).
-    assert tac.prefetch_trigger_tokens(_compressor(), 0.01) == 4_480
 
 
 def test_trigger_clamped_below_threshold_and_above_zero():
@@ -52,6 +45,7 @@ def test_trigger_clamped_below_threshold_and_above_zero():
         (1_000_000, 750_000, 0.05, 700_000),  # big validation band
         (32_000, 24_000, 0.15, 19_200),  # absolute-cap interplay
         (0, 5_120, 0.01, None),         # no context known -> no trigger
+        (1_000, 5_120, 0.0005, 5_119),  # sub-unit margin -> clamp to thr-1
     ],
 )
 def test_trigger_parametrized(context_length, threshold_tokens, margin, expected):
@@ -174,23 +168,67 @@ def test_pending_session_mismatch_clears_state():
     assert agent.prefetch_compaction_pending is None
 
 
-def test_await_failure_clears_state_and_allows_blocking():
-    # A worker that FAILED while awaited must clear the pending state and return
-    # 'none' so the blocking backstop can proceed — not 'pending' (which would
-    # skip the blocking pass while over threshold).
+def test_done_failure_discards_state_and_allows_blocking():
+    # Worker future finished WITH an exception: the done() branch logs, clears
+    # the pending state and returns 'none' so the blocking backstop can proceed.
     from concurrent.futures import Future
 
     agent = _agent()
     fut = Future()
     fut.set_exception(RuntimeError("worker exploded"))
     agent.prefetch_compaction_pending = SimpleNamespace(
-        session_id="same-session", fence=object(), future=fut,
-        snapshot=[], idle_timeout=1.0,
+        session_id=None, fence=object(), future=fut, snapshot=[], idle_timeout=1.0,
     )
-    # tokens above threshold -> the step enters the await branch
     action, _msgs = tac.run_prefetch_compaction_step(agent, _arm_msgs(), 5_200)
     assert action == "none"
     assert agent.prefetch_compaction_pending is None
+
+
+class _DuckFuture:
+    """Future whose done() stays False; result() raises on first call.
+
+    Lets the await branch be tested without a real 5s wait.
+    """
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def done(self):
+        return False
+
+    def result(self, timeout=None):
+        raise self._exc
+
+    def add_done_callback(self, cb):  # pragma: no cover - not reached
+        pass
+
+
+def test_await_branch_failure_clears_state():
+    # Worker fails WHILE being awaited (not earlier): must clear state and let
+    # the blocking path run this pass.
+    agent = _agent()
+    agent.prefetch_compaction_pending = SimpleNamespace(
+        session_id=None, fence=object(),
+        future=_DuckFuture(RuntimeError("late failure")), snapshot=[], idle_timeout=1.0,
+    )
+    action, _msgs = tac.run_prefetch_compaction_step(agent, _arm_msgs(), 5_200)
+    assert action == "none"
+    assert agent.prefetch_compaction_pending is None
+
+
+def test_await_branch_timeout_keeps_pending():
+    # Worker still running at the wait deadline: stay 'pending' (worker owns the
+    # session lease; the blocking pass will lock-skip), never clear.
+    from concurrent.futures import TimeoutError as _FT
+
+    agent = _agent()
+    agent.prefetch_compaction_pending = SimpleNamespace(
+        session_id=None, fence=object(),
+        future=_DuckFuture(_FT("still running")), snapshot=[], idle_timeout=1.0,
+    )
+    action, _msgs = tac.run_prefetch_compaction_step(agent, _arm_msgs(), 5_200)
+    assert action == "pending"
+    assert agent.prefetch_compaction_pending is not None
 
 
 def test_pending_below_threshold_stays_pending():
@@ -337,3 +375,298 @@ def test_policy_none_below_threshold_with_pending():
         pending_exists=True, pending_done=False, tokens=4_800, threshold_tokens=5_120
     )
     assert act == "none"
+
+
+# ---------------------------------------------------------------------------
+# Ballot reasons (distinct refusal contracts)
+# ---------------------------------------------------------------------------
+
+
+def test_ballot_reason_margin_zero():
+    ok, reason = tac.can_prefetch(_agent(compression_prefetch_margin=0.0), _arm_msgs(), 4_600)
+    assert not ok and reason == "margin_zero"
+
+
+def test_ballot_reason_no_compressor():
+    a = _agent()
+    a.context_compressor = None
+    ok, reason = tac.can_prefetch(a, _arm_msgs(), 4_600)
+    assert not ok and reason == "no_compressor"
+
+
+def test_ballot_reason_no_trigger():
+    a = _agent()
+    a.context_compressor = _compressor(context_length=0)
+    ok, reason = tac.can_prefetch(a, _arm_msgs(), 4_600)
+    assert not ok and reason == "no_trigger"
+
+
+# ---------------------------------------------------------------------------
+# Launch + in-process arm -> adopt
+# ---------------------------------------------------------------------------
+
+
+def _fake_cc(monkeypatch, *, admit=True, result=None):
+    """Monkeypatch the conversation_compression seams the launch uses.
+
+    The fake executor runs the submitted worker SYNCHRONOUSLY and returns a
+    resolved Future, so arming + adoption are exercised in-process with no
+    thread.
+    """
+    import agent.conversation_compression as cc
+    from concurrent.futures import Future
+
+    st = {"released": 0, "calls": []}
+
+    monkeypatch.setattr(cc, "_try_admit_compression_job", lambda: admit)
+
+    def _release(*_a):
+        st["released"] += 1
+
+    monkeypatch.setattr(cc, "_release_compression_admission", _release)
+
+    class FakeExec:
+        def submit(self, fn, *a, **k):
+            out = fn(*a, **k)
+            f = Future()
+            f.set_result(out)
+            return f
+
+    monkeypatch.setattr(cc, "_get_compress_timeout_executor", lambda: FakeExec())
+
+    if result is not None:
+        def fake_compress(agent, messages, system_message, approx_tokens=None,
+                          task_id=None, defer_context_engine_notification=False,
+                          commit_fence=None):
+            st["calls"].append(
+                {"approx_tokens": approx_tokens, "task_id": task_id, "commit_fence": commit_fence}
+            )
+            return result
+
+        monkeypatch.setattr(cc, "compress_context", fake_compress)
+    return st
+
+
+def test_launch_arms_publishes_fence_and_releases_admission(monkeypatch):
+    result = ([{"role": "user", "content": "compacted"}], "sys")
+    st = _fake_cc(monkeypatch, result=result)
+    agent = _agent()
+    msgs = _arm_msgs(40)
+    state = tac.launch_prefetch_compression(agent, msgs, "sys-prompt", 4_600, task_id="t1")
+    assert state is not None
+    assert agent.prefetch_compaction_pending is state
+    assert agent._active_compression_commit_fence is state.fence
+    assert state.snapshot == msgs and state.snapshot is not msgs  # frozen shallow copy
+    assert state.arm_index == 40 and state.armed_tokens == 4_600
+    assert st["released"] == 1  # done-callback must release the admission
+    assert st["calls"][0]["approx_tokens"] == 4_600
+    assert st["calls"][0]["task_id"] == "t1"
+    assert st["calls"][0]["commit_fence"] is state.fence
+
+
+def test_launch_refused_when_already_pending(monkeypatch):
+    st = _fake_cc(monkeypatch, result=([], ""))
+    agent = _agent(prefetch_compaction_pending=object())
+    assert tac.launch_prefetch_compression(agent, _arm_msgs(), "s", 4_600) is None
+    assert st["calls"] == []
+
+
+def test_launch_refused_when_pool_saturated(monkeypatch):
+    st = _fake_cc(monkeypatch, admit=False, result=([], ""))
+    agent = _agent()
+    assert tac.launch_prefetch_compression(agent, _arm_msgs(), "s", 4_600) is None
+    assert st["calls"] == []
+    assert st["released"] == 0  # never admitted -> nothing to release
+
+
+def test_step_arm_then_adopt_end_to_end(monkeypatch):
+    # The full in-process flow: gate 1 arms, gate 2 (worker already done) adopts.
+    result = ([{"role": "user", "content": "compacted"}], "sys")
+    _fake_cc(monkeypatch, result=result)
+    agent = _agent()
+    msgs = _arm_msgs(40)
+
+    action1, msgs1 = tac.run_prefetch_compaction_step(
+        agent, msgs, 4_600, system_message="s", task_id="t1"
+    )
+    assert action1 == "armed" and msgs1 is msgs
+    assert agent.prefetch_compaction_pending is not None
+
+    action2, msgs2 = tac.run_prefetch_compaction_step(
+        agent, msgs, 4_600, system_message="s", task_id="t1"
+    )
+    assert action2 == "adopted"
+    assert msgs2 == result[0]
+    assert agent.prefetch_compaction_pending is None
+    assert agent._last_compaction_in_place is True
+    assert not hasattr(agent, "_active_compression_commit_fence")  # fence unregistered
+
+
+def test_clear_pending_state_fence_ownership():
+    agent = _agent()
+    ours, other = object(), object()
+
+    # A newer pass owns the active fence: clearing must NOT pop it.
+    agent.prefetch_compaction_pending = SimpleNamespace(fence=ours)
+    agent._active_compression_commit_fence = other
+    tac._clear_pending_state(agent)
+    assert agent._active_compression_commit_fence is other
+
+    # Still ours: clear it out.
+    agent.prefetch_compaction_pending = SimpleNamespace(fence=ours)
+    agent._active_compression_commit_fence = ours
+    tac._clear_pending_state(agent)
+    assert not hasattr(agent, "_active_compression_commit_fence")
+
+
+# ---------------------------------------------------------------------------
+# Adoption edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_adoption_rejects_non_tuple_result():
+    live = _arm_msgs()
+    state = SimpleNamespace(snapshot=list(live), arm_index=40, result=None)
+    new_msgs, adopted, reason = tac.adopt_prefetch_result(live, state, ["not-a-tuple"])
+    assert not adopted and new_msgs is live and reason == "bad_result"
+
+
+def test_adoption_worker_noop_when_result_is_snapshot_identity():
+    live = _arm_msgs()
+    snap = list(live)
+    state = SimpleNamespace(snapshot=snap, arm_index=40, result=None)
+    new_msgs, adopted, reason = tac.adopt_prefetch_result(live, state, (snap, "s"))
+    assert not adopted and new_msgs is live and reason == "worker_noop"
+
+
+def test_adoption_worker_noop_on_equal_copy():
+    # Deep-equal but distinct list of the same length: still a no-op, not a
+    # "splice" that would silently rewrite identical history.
+    live = _arm_msgs()
+    state = SimpleNamespace(snapshot=list(live), arm_index=40, result=None)
+    copy_of_snap = [dict(m) for m in live]
+    new_msgs, adopted, reason = tac.adopt_prefetch_result(live, state, (copy_of_snap, "s"))
+    assert not adopted and new_msgs is live and reason == "worker_noop"
+
+
+# ---------------------------------------------------------------------------
+# Worker pre-cancel, submit failure, saturated step, done/await discards
+# ---------------------------------------------------------------------------
+
+
+def test_worker_returns_input_when_fence_precancelled(monkeypatch):
+    # A /stop between arm and worker start: the worker must return the input
+    # untouched WITHOUT touching compress_context, and adoption must discard.
+    import agent.conversation_compression as cc
+
+    _fake_cc(monkeypatch)
+    called = []
+    monkeypatch.setattr(cc, "compress_context", lambda *a, **k: called.append(1))
+
+    class FakeFence:
+        deadline_exceeded = True
+        is_cancelled = False
+
+        def set_total_ceiling_seconds(self, s):
+            self.ceiling = s
+
+    monkeypatch.setattr(cc, "CompressionCommitFence", FakeFence)
+    agent = _agent()
+    msgs = _arm_msgs(40)
+    state = tac.launch_prefetch_compression(agent, msgs, "s", 4_600)
+    assert state is not None and called == []
+
+    action, out = tac.run_prefetch_compaction_step(agent, msgs, 4_600)
+    assert action == "none" and out is msgs  # no-op result -> discard, no corruption
+
+
+def test_launch_releases_admission_when_submit_raises(monkeypatch):
+    import agent.conversation_compression as cc
+
+    st = _fake_cc(monkeypatch)
+
+    class BoomExec:
+        def submit(self, *a, **k):
+            raise RuntimeError("pool dead")
+
+    monkeypatch.setattr(cc, "_get_compress_timeout_executor", lambda: BoomExec())
+    agent = _agent()
+    with pytest.raises(RuntimeError):
+        tac.launch_prefetch_compression(agent, _arm_msgs(), "s", 4_600)
+    assert st["released"] == 1  # admission must not leak on submit failure
+    assert agent.prefetch_compaction_pending is None
+
+
+def test_step_stays_none_when_pool_saturated(monkeypatch):
+    # Ballot passes but the pool refuses: the step reports 'none' so the caller
+    # keeps the normal (non-compressing) behaviour this pass.
+    _fake_cc(monkeypatch, admit=False)
+    agent = _agent()
+    action, _ = tac.run_prefetch_compaction_step(agent, _arm_msgs(), 4_600)
+    assert action == "none" and agent.prefetch_compaction_pending is None
+
+
+def test_step_none_when_ballot_refuses():
+    # Feature off (margin 0): the step must be a pass-through with the caller's
+    # list untouched.
+    agent = _agent(compression_prefetch_margin=0.0)
+    msgs = _arm_msgs()
+    action, out = tac.run_prefetch_compaction_step(agent, msgs, 4_600)
+    assert action == "none" and out is msgs
+
+
+def test_done_branch_discards_diverged_result(monkeypatch):
+    _fake_cc(monkeypatch, result=([{"role": "user", "content": "compact"}], "s"))
+    agent = _agent()
+    msgs = _arm_msgs(40)
+    assert tac.run_prefetch_compaction_step(agent, msgs, 4_600)[0] == "armed"
+    msgs[20] = {"role": "user", "content": "diverged"}  # edit-resend after arm
+    action, out = tac.run_prefetch_compaction_step(agent, msgs, 4_600)
+    assert action == "none" and out is msgs
+    assert agent.prefetch_compaction_pending is None
+
+
+class _DuckReturns:
+    """Future whose done() stays False; result() RETURNS a value."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def done(self):
+        return False
+
+    def result(self, timeout=None):
+        return self.value
+
+    def add_done_callback(self, cb):  # pragma: no cover - not reached
+        pass
+
+
+def test_await_branch_adopts_completed_result():
+    live = _arm_msgs(40)
+    snap = list(live)
+    result = ([{"role": "user", "content": "compact"}], "s")
+    agent = _agent()
+    agent.prefetch_compaction_pending = SimpleNamespace(
+        session_id=None, fence=object(), future=_DuckReturns(result),
+        snapshot=snap, idle_timeout=1.0,
+    )
+    action, out = tac.run_prefetch_compaction_step(agent, live, 5_200)
+    assert action == "adopted" and out == result[0]
+    assert agent.prefetch_compaction_pending is None
+    assert agent._last_compaction_in_place is True
+
+
+def test_await_branch_discards_failed_adoption():
+    msgs = _arm_msgs(40)
+    snap = list(msgs)
+    msgs[5] = {"role": "user", "content": "diverged"}
+    result = ([{"role": "user", "content": "compact"}], "s")
+    agent = _agent()
+    agent.prefetch_compaction_pending = SimpleNamespace(
+        session_id=None, fence=object(), future=_DuckReturns(result),
+        snapshot=snap, idle_timeout=1.0,
+    )
+    action, out = tac.run_prefetch_compaction_step(agent, msgs, 5_200)
+    assert action == "none" and out is msgs
+    assert agent.prefetch_compaction_pending is None

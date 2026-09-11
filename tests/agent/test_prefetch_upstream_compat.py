@@ -4,8 +4,9 @@ The fork is a version-locked patch over `main`: Hermes updates WILL refactor the
 host seams (conversation_compression, context_compressor, agent_init, gate
 files). These tests exist so that breakage is loud and MECHANICAL to diagnose:
 each failure names the seam and the expected contract. They assert API shape
-(symbols exist, signatures accept the keywords the fork passes) — never source
-text, per repo testing rules.
+(symbols exist, signatures accept the keywords the fork passes, config plumbing
+behaves) — with ONE deliberate source guard (test_agent_attr_wiring_contract)
+for the agent_init assignment line, which has no cheap runtime seam.
 
 When an upstream update breaks this file, adjust the fork against the new
 contract, not the tests.
@@ -152,23 +153,45 @@ def test_gate_function_names_contract():
         )
 
 
-def test_agent_attr_names_contract():
-    """The agent attributes the module reads must be spelled as agent_init sets them.
+def test_prefetch_margin_config_contract():
+    """The config->settings plumbing for prefetch_margin must survive rebases.
 
-    Guarded by name, so this only fires when someone renames the attribute in
-    BOTH the module and this test — intentional, since the runtime wiring is
-    produced by agent_init and consumed by the module.
+    This is the seam most likely to silently vanish when upstream rewrites
+    _parse_compression_config: the key would be ignored, the feature silently
+    off. Values: parsed as float, negatives clamped to 0, garbage -> 0.
     """
-    mod = pytest.importorskip("agent.turn_prefetch_compaction")
-    code = inspect.getsource(mod)
-    for attr in (
-        "compression_prefetch_margin",
-        "compression_enabled",
-        "compression_in_place",
-        "codex_responses_native_compaction",
-        "prefetch_compaction_pending",
-    ):
-        assert attr in code, (
-            f"PREFETCH-FORK DRIFT: source of turn_prefetch_compaction no longer "
-            f"references '{attr}'; the runtime contract with agent_init changed."
-        )
+    from types import SimpleNamespace
+
+    ai = pytest.importorskip("agent.agent_init")
+    agent = SimpleNamespace(api_mode=None, model="test/model")
+
+    out = ai._parse_compression_config(agent, {"compression": {"prefetch_margin": 0.05}})
+    assert out.prefetch_margin == 0.05, (
+        "PREFETCH-FORK DRIFT: compression.prefetch_margin no longer reaches "
+        "CompressionSettings — re-apply the parse hook in agent_init.py."
+    )
+    assert ai._parse_compression_config(agent, {}).prefetch_margin == 0.0
+    assert ai._parse_compression_config(
+        agent, {"compression": {"prefetch_margin": -1.5}}
+    ).prefetch_margin == 0.0
+    assert ai._parse_compression_config(
+        agent, {"compression": {"prefetch_margin": "garbage"}}
+    ).prefetch_margin == 0.0
+
+    # The key must exist in DEFAULT_CONFIG so `hermes config set` treats it as
+    # a known setting instead of a custom-key warning path.
+    cd = pytest.importorskip("hermes_cli.config_defaults")
+    assert "prefetch_margin" in cd.DEFAULT_CONFIG.get("compression", {}), (
+        "PREFETCH-FORK DRIFT: DEFAULT_CONFIG lost compression.prefetch_margin."
+    )
+
+
+def test_agent_attr_wiring_contract():
+    """agent_init must keep assigning the attribute the module reads."""
+    ai = pytest.importorskip("agent.agent_init")
+    src = inspect.getsource(ai)
+    assert "agent.compression_prefetch_margin" in src, (
+        "PREFETCH-FORK DRIFT: init_agent no longer assigns "
+        "agent.compression_prefetch_margin — the module would silently see the "
+        "0.0 default and never arm."
+    )
