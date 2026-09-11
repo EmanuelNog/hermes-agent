@@ -171,7 +171,7 @@ compression:
   tail_mode: lean            # Tail retention policy: lean | legacy (default: lean)
   prefetch_margin: 0.0          # Fraction of the window below threshold at which the
                              # summary worker is armed WITHOUT blocking the loop
-                             # (0 = disabled; see "Prefetch compaction" below)
+                             # (0 = disabled; see the Prefetch Compression page)
   protect_last_n: 20         # Minimum protected tail messages (default: 20)
   min_tail_user_messages: 1  # Real user messages guaranteed in the tail (default: 1)
   codex_gpt55_autoraise: true  # gpt-5.5 on Codex OAuth: raise trigger to 85% (default: true)
@@ -208,6 +208,8 @@ auxiliary:
 | `codex_responses_native` | `false` | bool | Opt in to OpenAI's server-side compaction on the Responses API. Engages only for gpt-5.6-family models on the direct OpenAI API or a ChatGPT Codex subscription (see below) |
 | `codex_responses_compact_threshold` | `null` | `null` or positive integer | `null` follows the resolved local compression trigger with an 8,192 token safety margin. A positive integer remains absolute and only clamps downward when required. Invalid values use automatic behavior. Automatic mode falls back to `200000` when no usable local trigger exists |
 | `in_place` | `true` | bool | Compact on the same session id instead of rotating to a new one (see below) |
+
+Prefetch details and design rationale: [Prefetch Compression](/developer-guide/prefetch-compression).
 
 ### In-place compaction (single stable session id)
 

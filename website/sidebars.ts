@@ -777,6 +777,7 @@ const sidebars: SidebarsConfig = {
             'developer-guide/agent-loop',
             'developer-guide/prompt-assembly',
             'developer-guide/context-compression-and-caching',
+            'developer-guide/prefetch-compression',
             'developer-guide/gateway-internals',
             'developer-guide/completion-backlog-delivery',
             'developer-guide/session-storage',
