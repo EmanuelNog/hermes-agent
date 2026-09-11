@@ -5,16 +5,17 @@
 - `origin` = `/home/agentuser/.hermes/hermes-agent` — local main checkout, refreshed
   daily by the checklist (`git fetch` + `reset --hard origin/main`); good fallback
   tip source when GitHub is unreachable.
-- `upstream` = `git@github.com:NousResearch/hermes-agent.git` — rewritten locally to
-  `https://github.com/...` and authenticated via `gh auth git-credential`
-  (repo-local config: `url.https://github.com/.insteadOf=git@github.com:`,
-  `credential.helper=!gh auth git-credential` — same pattern as the main checkout).
-  NOTE: the global ~/.gitconfig carries the OPPOSITE rewrite (https→ssh), and this
-  box has no GitHub-registered SSH key — without the repo-local reverse rule all
-  GitHub fetches fail with "Permission denied (publickey)".
-- Direct `git fetch upstream main` works when GitHub egress is not rate-limited.
-  429s ("too many requests" on the shared IP) are transient — retry later, or port
-  from `origin` (mirror tip, ~hours behind).
+- `upstream` = `git@github.com:NousResearch/hermes-agent.git` — plain SSH via
+  `~/.ssh/id_ed25519`, registered to EmanuelNog (re-registered 2026-09-11; verify
+  with `ssh -T git@github.com` → "Hi EmanuelNog!"). Fetch is narrowed to main only
+  (`remote.upstream.fetch=+refs/heads/main:...`, `--no-tags`) to keep the shallow
+  repo lean.
+- Fallback if SSH ever breaks or GitHub rate-limits the git endpoints (HTTP 429 on
+  the shared IP — seen before the key was re-registered): temporarily switch to the
+  gh-token HTTPS path, fetch, then revert:
+  `git config url.https://github.com/.insteadOf git@github.com:` +
+  `git config credential.helper '!gh auth git-credential'` → `git fetch upstream` →
+  unset both. Porting also works from `origin` (mirror tip, ~hours behind).
 
 ## Why not a plain merge
 
