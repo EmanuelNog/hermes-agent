@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Import a fork transcript from the MAIN state.db (read-only) into the
-asyncbig dev profile home, for big-scale prefetch validation (bead .5).
+prefetchbig dev profile home, for big-scale prefetch validation (bead .5).
 Main install is never written to; the constraint is main stays untouched.
 """
 import json
@@ -8,12 +8,12 @@ import sqlite3
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/home/agentuser/Projects/hermes-async")
+sys.path.insert(0, "/home/agentuser/Projects/hermes-prefetch-compress")
 
 from hermes_state import SessionDB
 
 MAIN_DB = Path("/home/agentuser/.hermes/state.db")
-BIG_DB = Path("/home/agentuser/.hermes/profiles/asyncbig/state.db")
+BIG_DB = Path("/home/agentuser/.hermes/profiles/prefetchbig/state.db")
 FORKS = [
     "20260907_230521_d588b3",  # default reasoning
     "20260907_230521_5a165c",  # low

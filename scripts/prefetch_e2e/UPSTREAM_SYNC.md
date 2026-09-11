@@ -38,7 +38,7 @@ last common ancestor:
 ## Port procedure (every upstream update)
 
 ```bash
-cd ~/Projects/hermes-async
+cd ~/Projects/hermes-prefetch-compress
 git fetch upstream main                     # or: git fetch origin  (mirror fallback)
 NEW=<new-tip-sha>; OLD=$(git rev-parse upstream-port/<previous-date>)
 git tag -f upstream-port/<today> $NEW       # anchor for the NEXT delta

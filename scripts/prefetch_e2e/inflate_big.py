@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inflate session 20260907_230521_d588b3 in the asyncbig home with realistic
+"""Inflate session 20260907_230521_d588b3 in the prefetchbig home with realistic
 audit-log filler so the REAL request lands ~620-640K tokens (arm 600K, threshold
 650K). Empirical ratio from API #1: real_in ~= 0.323*chars + 99K.
 Current: 628K chars -> ~302K real. Need ~+1.0M chars.
@@ -8,12 +8,12 @@ import os
 import sys
 from pathlib import Path
 
-os.environ.setdefault("HERMES_HOME", "/home/agentuser/.hermes/profiles/asyncbig")
-sys.path.insert(0, "/home/agentuser/Projects/hermes-async")
+os.environ.setdefault("HERMES_HOME", "/home/agentuser/.hermes/profiles/prefetchbig")
+sys.path.insert(0, "/home/agentuser/Projects/hermes-prefetch-compress")
 
 from hermes_state import SessionDB
 
-BIG_DB = Path("/home/agentuser/.hermes/profiles/asyncbig/state.db")
+BIG_DB = Path("/home/agentuser/.hermes/profiles/prefetchbig/state.db")
 SID = "20260907_230521_d588b3"
 db = SessionDB(db_path=BIG_DB)
 

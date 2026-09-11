@@ -1,9 +1,9 @@
 import os, sys
-os.environ.setdefault("HERMES_HOME", "/home/agentuser/.hermes/profiles/asyncbig")
-sys.path.insert(0, "/home/agentuser/Projects/hermes-async")
+os.environ.setdefault("HERMES_HOME", "/home/agentuser/.hermes/profiles/prefetchbig")
+sys.path.insert(0, "/home/agentuser/Projects/hermes-prefetch-compress")
 from hermes_state import SessionDB
 from pathlib import Path
-db = SessionDB(db_path=Path("/home/agentuser/.hermes/profiles/asyncbig/state.db"))
+db = SessionDB(db_path=Path("/home/agentuser/.hermes/profiles/prefetchbig/state.db"))
 SID = "20260907_230521_d588b3"
 msgs = []
 tool_idx = 200

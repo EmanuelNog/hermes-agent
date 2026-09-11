@@ -4,17 +4,17 @@ Re-validation tooling for the prefetch compaction fork. Unit tests
 (`tests/agent/test_prefetch_compaction.py`, `tests/agent/test_prefetch_upstream_compat.py`)
 cover the state machine and host seams; these scripts reproduce the FULL loop
 behaviour (arm -> keep working -> adopt across turns) against the dev profiles
-`asyncdev` (small-scale, 64K window) and `asyncbig` (big-scale, 1M window).
+`prefetchdev` (small-scale, 64K window) and `prefetchbig` (big-scale, 1M window).
 
 Run after every upstream fetch, once the compat suite is green.
 **Upstream update procedure: see `UPSTREAM_SYNC.md` (shallow-repo delta port + checklist).**
 
-## Small-scale (minutes): profile `asyncdev`
+## Small-scale (minutes): profile `prefetchdev`
 
 ```bash
-venv/bin/python scripts/prefetch_e2e/seed_asyncdev.py        # seed a session with filler + tool pairs
+venv/bin/python scripts/prefetch_e2e/seed_prefetchdev.py        # seed a session with filler + tool pairs
 # then drive a PERSISTENT process (the worker dies with a one-shot chat -q):
-#   interactive REPL:  ./dev-run.sh -p asyncdev
+#   interactive REPL:  ./dev-run.sh -p prefetchdev
 #   or a script(1) PTY harness (see skill hermes-context-compression)
 # expect: "Prefetch compression armed at ~..." then "... adopted: N -> M messages"
 ```
@@ -23,7 +23,7 @@ Config: `compression.threshold_tokens 40000`, `compression.prefetch_margin 0.15`
 The band must be wider than the largest single tool-result jump or arming gets
 skipped (estimator jitter ~3K tokens).
 
-## Big-scale (tens of minutes): profile `asyncbig`
+## Big-scale (tens of minutes): profile `prefetchbig`
 
 ```bash
 venv/bin/python scripts/prefetch_e2e/import_fork_big.py      # import a big transcript from the main state.db (read-only)

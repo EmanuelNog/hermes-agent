@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed a ~22.5K-token session in the asyncdev profile home (bead .1).
+"""Seed a ~22.5K-token session in the prefetchdev profile home (bead .1).
 
 Restore-safe: every tool row is properly paired (assistant carries tool_calls,
 tool row carries tool_call_id) so no alternation repair drops rows. Target
@@ -12,12 +12,12 @@ import sys
 import time
 from pathlib import Path
 
-os.environ.setdefault("HERMES_HOME", "/home/agentuser/.hermes/profiles/asyncdev")
-sys.path.insert(0, "/home/agentuser/Projects/hermes-async")
+os.environ.setdefault("HERMES_HOME", "/home/agentuser/.hermes/profiles/prefetchdev")
+sys.path.insert(0, "/home/agentuser/Projects/hermes-prefetch-compress")
 
 from hermes_state import SessionDB
 
-DB_PATH = Path("/home/agentuser/.hermes/profiles/asyncdev/state.db")
+DB_PATH = Path("/home/agentuser/.hermes/profiles/prefetchdev/state.db")
 sid = time.strftime("seed2_%Y%m%d_%H%M%S")
 db = SessionDB(db_path=DB_PATH)
 db.create_session(session_id=sid, source="cli")
