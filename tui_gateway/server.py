@@ -27,6 +27,7 @@ from hermes_constants import (
     reset_hermes_home_override, set_hermes_home_override)
 from hermes_cli.env_loader import load_hermes_dotenv
 from utils import is_truthy_value
+from hermes_state_ids import new_session_id
 from tools.environments.local import hermes_subprocess_env
 from agent.replay_cleanup import sanitize_replay_history
 from agent.compaction_display import project_compaction_message_for_display  # noqa: F401
@@ -506,19 +507,10 @@ def _profile_scoped(handler):
 
     Secondary-profile adapters are constructed inside ``_profile_runtime_scope`` (secret scope installed +
     multiplex active) — the same discriminator the Buzz/SimpleX adapters use for this bug class (#98738).
-    The DEFAULT profile under multiplexing runs unscoped: ``os.environ`` holds its own bridge output there
-    and keeps its legacy precedence.
-    Same discriminator as the Buzz/SimpleX/Raft adapters (#98738): secret scope installed + multiplex
-    active. The DEFAULT profile under multiplexing (and every single-profile process) runs unscoped and
-    keeps its legacy ``os.environ`` precedence.
-    Secondary-profile adapters are constructed, connected, and reloaded inside ``_profile_runtime_scope``
-    (secret scope installed + multiplex active) — the same discriminator as the Discord adapter's
-    ``_profile_scoped_config_load`` (#72348). The DEFAULT profile under multiplexing runs unscoped:
-    ``os.environ`` holds its own bridge output there and keeps its legacy precedence.
-    Secondary-profile adapters are constructed, connected, and reloaded inside ``_profile_runtime_scope``
-    (secret scope installed + multiplex active) — the same discriminator the Buzz/SimpleX adapters use for
-    this bug class (#98738). The DEFAULT profile under multiplexing runs unscoped: ``os.environ`` holds its
-    own bridge output there and keeps its legacy precedence.
+    Once multiplexing is active, launch-profile *turns* bind their own terminal scope
+    (``prompt_turn._prepare_turn_input``) so they never depend on ambient ``os.environ``
+    that a secondary context might have poisoned (#107422). Single-profile processes stay
+    unscoped and keep legacy ``os.environ`` precedence.
     """
     def wrapper(rid, params):
         home = _profile_home(params.get("profile") if isinstance(params, dict) else None)
@@ -550,7 +542,7 @@ def _configured_cwd_from_cfg(cfg: dict | None) -> str | None:
 def _profile_configured_cwd(profile_home: Path | None) -> str | None:
     """A non-launch profile's ``terminal.cwd`` from ITS config.yaml (fail-open → None): the process-global
     ``TERMINAL_CWD`` belongs to the *launch* profile, and load_config() resolves the ACTIVE profile, so
-    read the file directly through the _load_cfg pipeline.
+    read that file through the same effective-config pipeline as ``_load_cfg``.
 
     A new session bound to another profile must take its workspace from THAT profile's config, not the stale
     env var (issue #40334). Returns an absolute, existing directory, or None for placeholders / missing /
@@ -559,9 +551,9 @@ def _profile_configured_cwd(profile_home: Path | None) -> str | None:
     if profile_home is None:
         return None
     with contextlib.suppress(Exception):
-        from hermes_cli.config import read_user_config_raw
+        from hermes_cli.config_effective import load_user_config_effective
         p = Path(profile_home) / "config.yaml"
-        return _configured_cwd_from_cfg(_expand_cfg(_apply_managed(read_user_config_raw(p)))) if p.exists() else None
+        return _configured_cwd_from_cfg(load_user_config_effective(p)) if p.exists() else None
     return None
 
 
@@ -585,8 +577,11 @@ def write_json(obj: dict) -> bool:
     (2) the context-bound transport (:func:`dispatch`); (3) module stdio (tests monkey-patch ``_real_stdout``).
     Every event frame gets a per-session monotonic ``seq`` + replay-ring entry so ``session.events.since`` can resume."""
     from tui_gateway.event_replay import _stamp_event
+    from tui_gateway.hosted_room_member_activity import project_room_member_activity
     _stamp_event(obj)
     if obj.get("method") == "event":
+        # A room member's hidden session has no transport: its frames would die at stdio below.
+        project_room_member_activity(obj, _sessions)
         params = obj.get("params")
         sid = ((params or {}).get("session_id")) if isinstance(params, dict) else ""
         if sid and (t := (_sessions.get(sid) or {}).get("transport")) is not None:
@@ -1165,31 +1160,15 @@ def _load_cfg_raw() -> dict:
     return {}
 
 
-def _expand_cfg(cfg: dict) -> dict:
-    """``${ENV_VAR}`` expansion (same as ``load_config_readonly``); non-dict results keep the input."""
-    from hermes_cli.config import _expand_env_vars
-    expanded = _expand_env_vars(cfg)
-    return expanded if isinstance(expanded, dict) else cfg
-
-
 def _load_cfg() -> dict:
-    """Behavioral config read: raw user file + managed overlay + ${VAR} expansion — ``load_config_readonly``
-    minus the DEFAULT_CONFIG merge (callers treat a missing key as "unset"; merging would break
-    ``_load_cfg() == {}`` sentinels). Never pass the result to ``_save_cfg`` (use ``_load_cfg_raw()``)."""
-    cfg = _apply_managed(_load_cfg_raw())
+    """Behavioral config read: the effective USER config (managed overlay, ``${VAR}`` expansion, model-key
+    canon) minus the DEFAULT_CONFIG merge — callers treat a missing key as "unset", so merging would break
+    ``_load_cfg() == {}`` sentinels. Fail-open to ``{}``. Never pass the result to ``_save_cfg`` (use
+    ``_load_cfg_raw()``)."""
     with contextlib.suppress(Exception):
-        cfg = _expand_cfg(cfg)
-    return cfg
-
-
-def _apply_managed(cfg: dict) -> dict:
-    """Overlay administrator-pinned managed-scope values (read-side only, fail-open): this backend builds
-    config independently of load_config, so managed skin/reasoning_effort/service_tier/provider_routing
-    would otherwise be silently ignored."""
-    with contextlib.suppress(Exception):
-        from hermes_cli import managed_scope
-        return managed_scope.apply_managed_overlay(cfg if isinstance(cfg, dict) else {})
-    return cfg
+        from hermes_cli.config_effective import load_user_config_effective
+        return load_user_config_effective(_active_config_path())
+    return {}
 
 
 def _save_cfg(cfg: dict):
@@ -2389,7 +2368,7 @@ def _init_session(
 
 
 def _new_session_key() -> str:
-    return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    return new_session_id()
 
 
 def _with_checkpoints(session, fn):
@@ -3223,7 +3202,6 @@ from . import (  # noqa: E402
     methods_complete_helpers as _methods_complete_helpers, session_auto_continue as _session_auto_continue,
     agent_callbacks as _agent_callbacks, session_history as _session_history,
     prompt_attachments as _prompt_attachments, session_notifications as _session_notifications,
-    session_wisdom as _session_wisdom,
     tool_progress as _tool_progress, change_watcher as _change_watcher,
     session_compression as _session_compression, model_switch as _model_switch,
     compute_host_bridge as _compute_host_bridge, session_workdir as _session_workdir,
@@ -3241,7 +3219,7 @@ from . import (  # noqa: E402
 
 for _m in (
     _session_transports, _session_reaper, _session_lifecycle, _session_workdir, _compute_host_bridge, _model_switch,
-    _session_compression, _change_watcher, _tool_progress, _session_wisdom, _session_notifications,
+    _session_compression, _change_watcher, _tool_progress, _session_notifications,
     _prompt_attachments, _session_history, _agent_callbacks, _session_auto_continue,
     _methods_complete_helpers, _methods_slash, _methods_voice, _methods_browser,
     _methods_browser_control, _methods_session, _methods_prompt, _methods_config,
