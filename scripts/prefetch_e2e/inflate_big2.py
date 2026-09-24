@@ -1,3 +1,5 @@
+"""MANUAL-ONLY (owner decision 2026-09-23): this prefetchbig harness is NOT part of automated fork validation (cost). Do not wire into the sync pipeline/CI. Run only when the owner explicitly asks for big-scale testing. Automated E2E uses prefetchdev only — see scripts/prefetch_e2e/README.md.
+"""
 import os, sys
 os.environ.setdefault("HERMES_HOME", "/home/agentuser/.hermes/profiles/prefetchbig")
 sys.path.insert(0, "/home/agentuser/Projects/hermes-prefetch-compress")

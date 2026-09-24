@@ -1,3 +1,5 @@
+"""MANUAL-ONLY (owner decision 2026-09-23): this prefetchbig harness is NOT part of automated fork validation (cost). Do not wire into the sync pipeline/CI. Run only when the owner explicitly asks for big-scale testing. Automated E2E uses prefetchdev only — see scripts/prefetch_e2e/README.md.
+"""
 #!/usr/bin/env python3
 """Import a fork transcript from the MAIN state.db (read-only) into the
 prefetchbig dev profile home, for big-scale prefetch validation (bead .5).

@@ -3,8 +3,17 @@
 Re-validation tooling for the prefetch compaction fork. Unit tests
 (`tests/agent/test_prefetch_compaction.py`, `tests/agent/test_prefetch_upstream_compat.py`)
 cover the state machine and host seams; these scripts reproduce the FULL loop
-behaviour (arm -> keep working -> adopt across turns) against the dev profiles
-`prefetchdev` (small-scale, 64K window) and `prefetchbig` (big-scale, 1M window).
+behaviour (arm -> keep working -> adopt across turns).
+
+> **PROFILE POLICY (owner decision 2026-09-23 — do not revert):**
+> The **automated** E2E that runs with every fork/upstream sync uses
+> **`prefetchdev` ONLY** (small-scale, 64K window — fast and cheap; big-context
+> compression runs cost too much for per-fork validation).
+> **`prefetchbig` is MANUAL-ONLY.** It stays alive for deliberate big-scale
+> testing when the owner explicitly asks, but must **never** be wired back into
+> the automated test list, the sync pipeline, or CI. Future agents: when
+> validating a fork/port, run only the `prefetchdev` steps; treat the
+> big-scale section below as documentation for a manual session.
 
 Run after every upstream fetch, once the compat suite is green.
 **Upstream update procedure: see `UPSTREAM_SYNC.md` (shallow-repo delta port + checklist).**
@@ -23,7 +32,11 @@ Config: `compression.threshold_tokens 40000`, `compression.prefetch_margin 0.15`
 The band must be wider than the largest single tool-result jump or arming gets
 skipped (estimator jitter ~3K tokens).
 
-## Big-scale (tens of minutes): profile `prefetchbig`
+## Big-scale: profile `prefetchbig` — ⚠️ MANUAL-ONLY, NOT part of automated validation
+
+> Do **NOT** run these as part of fork validation or the sync pipeline (cost
+> decision 2026-09-23). Run only on explicit owner request, as a deliberate
+> manual session. See the PROFILE POLICY note at the top.
 
 ```bash
 venv/bin/python scripts/prefetch_e2e/import_fork_big.py      # import a big transcript from the main state.db (read-only)
