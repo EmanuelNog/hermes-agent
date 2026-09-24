@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Seed a ~22.5K-token session in the prefetchdev profile home (bead .1).
+"""Seed a ~9K-token session in the prefetchdev profile home (bead .1).
 
 Restore-safe: every tool row is properly paired (assistant carries tool_calls,
 tool row carries tool_call_id) so no alternation repair drops rows. Target
-start-of-resume total ~22.5K tokens: under the async arm point (30,400 =
-threshold_tokens 40,000 - margin 0.15*64K) so the resume turn's own tool
-growth crosses it mid-turn.
+start-of-resume total ~9K tokens (tune with PREFETCH_SEED_ROUNDS, default 24):
+under the async arm point (12,400 = threshold_tokens 16,000 - margin 0.15*24K)
+so the resume turn's own tool growth crosses it mid-turn.
 """
 import os
 import sys
@@ -18,6 +18,7 @@ sys.path.insert(0, "/home/agentuser/Projects/hermes-prefetch-compress")
 from hermes_state import SessionDB
 
 DB_PATH = Path("/home/agentuser/.hermes/profiles/prefetchdev/state.db")
+ROUNDS = int(os.environ.get("PREFETCH_SEED_ROUNDS", "24"))  # tune seed size; ~9K at 24
 sid = time.strftime("seed2_%Y%m%d_%H%M%S")
 db = SessionDB(db_path=DB_PATH)
 db.create_session(session_id=sid, source="cli")
@@ -99,7 +100,7 @@ for i in range(4):
     )})
     msgs.append(t[1])
 
-for i in range(2, 80):
+for i in range(2, ROUNDS):
     t = tool_pair("terminal", (
         "cd /tmp/fliptext && venv/bin/python -m pytest tests/ -q\n"
         "============================= test session starts =============================\n"

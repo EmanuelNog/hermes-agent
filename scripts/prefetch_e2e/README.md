@@ -21,14 +21,17 @@ Run after every upstream fetch, once the compat suite is green.
 ## Small-scale (minutes): profile `prefetchdev`
 
 ```bash
-venv/bin/python scripts/prefetch_e2e/seed_prefetchdev.py        # seed a session with filler + tool pairs
+venv/bin/python scripts/prefetch_e2e/seed_prefetchdev.py        # seed a ~7.5–9K session (PREFETCH_SEED_ROUNDS default 24)
 # then drive a PERSISTENT process (the worker dies with a one-shot chat -q):
 #   interactive REPL:  ./dev-run.sh -p prefetchdev
 #   or a script(1) PTY harness (see skill hermes-context-compression)
 # expect: "Prefetch compression armed at ~..." then "... adopted: N -> M messages"
 ```
 
-Config: `compression.threshold_tokens 40000`, `compression.prefetch_margin 0.15`.
+Config (2026-09-24: shrunk to cut test spend — window 24K, threshold 16K):
+`compression.threshold_tokens 16000`, `compression.prefetch_margin 0.15`,
+`model.context_length 24000` (arm point 12,400; the seed lands ~7.5K so the
+resume turn's tool growth crosses it mid-turn).
 The band must be wider than the largest single tool-result jump or arming gets
 skipped (estimator jitter ~3K tokens).
 
