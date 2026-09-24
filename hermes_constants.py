@@ -229,7 +229,15 @@ def get_default_hermes_root() -> Path:
         try:
             env_path.resolve().relative_to(native_home.resolve())  # under ~/.hermes (normal or profile mode)
         except ValueError:  # Docker/custom root: <root>/profiles/<name> -> <root>, else HERMES_HOME itself
-            result = env_path.parent.parent if env_path.parent.name == "profiles" else env_path
+            if env_path.parent.name == "profiles":
+                result = env_path.parent.parent
+            elif is_hermes_home_path(env_path):
+                result = env_path
+            else:
+                # Stray HERMES_HOME export (points at a non-hermes directory, e.g. an
+                # OS home): must not hijack profile resolution — fall back to the
+                # conventional root (2026-09-24).
+                result = native_home
     _default_hermes_root_memo = (*memo_key, result)
     return result
 
@@ -238,6 +246,31 @@ def get_default_hermes_root() -> Path:
 _DELETED_PROFILES_DIR = ".deleted"
 # Files marking a real Hermes home; arbitrary dirs with a ``profiles`` segment lack them.
 _HERMES_HOME_MARKERS = ("config.yaml", ".env", "state.db")
+
+
+def is_hermes_home_path(home_dir: Path) -> bool:
+    """True when *home_dir* carries a real hermes-install identity: marker files
+    at the root, or a ``profiles/`` tree containing at least one live profile.
+
+    Used to decide whether an exported ``HERMES_HOME`` names a genuine install
+    root (Docker/custom layouts) or is a stray export pointing at an arbitrary
+    directory (e.g. the OS home) that must not hijack profile resolution
+    (2026-09-24: ``HERMES_HOME=/home/agentuser`` made ``-p`` report the
+    profile as missing). ``state.db`` alone does NOT mark a root — it lingers
+    on directories that once hosted a home but are no longer installs."""
+    try:
+        if any((home_dir / marker).exists() for marker in ("config.yaml", ".env")):
+            return True
+        profiles_dir = home_dir / "profiles"
+        if profiles_dir.is_dir():
+            for child in profiles_dir.iterdir():
+                if child.is_dir() and not child.name.startswith(".") and any(
+                    (child / marker).exists() for marker in ("config.yaml", ".env")
+                ):
+                    return True
+    except OSError:
+        pass
+    return False
 
 
 def _is_hermes_profiles_root(profiles_dir: Path) -> bool:

@@ -67,13 +67,26 @@ def normalize_tool_schema(schema: Any) -> Optional[Dict[str, Any]]:
     Providers should return ``{"name", "description", "parameters"}`` but some return the
     wrapped OpenAI form; wrapping that twice yields a nameless ``function`` and strict
     providers (DeepSeek) reject the ENTIRE request, so both shapes are normalized here.
+    Anthropic-shaped providers that return ``input_schema`` (no ``parameters``) are also
+    canonicalized: strict OpenAI-compatible providers (opencode-go, DeepSeek) reject
+    ``input_schema`` with a whole-request 400 (2026-09-24).
     """
     if not isinstance(schema, dict):
         return None
     if schema.get("type") == "function" and isinstance(schema.get("function"), dict):
         schema = schema["function"]
     name = schema.get("name", "")
-    return schema if name and isinstance(name, str) else None
+    if not (name and isinstance(name, str)):
+        return None
+    params = schema.get("parameters")
+    if not isinstance(params, dict):
+        input_schema = schema.get("input_schema")
+        if isinstance(input_schema, dict):
+            schema["parameters"] = input_schema
+        elif params is not None:
+            schema["parameters"] = {}
+    schema.pop("input_schema", None)
+    return schema
 
 
 def memory_provider_tools_enabled(enabled_toolsets: Optional[List[str]], disabled_toolsets: Optional[List[str]] = None,

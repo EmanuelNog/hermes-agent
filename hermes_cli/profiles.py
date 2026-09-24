@@ -2345,12 +2345,25 @@ def rename_profile(old_name: str, new_name: str) -> Path:
 def profile_root_for_env_home(env_home: str, default_root: Path) -> Path:
     """Hermes root named by an exported ``HERMES_HOME``: the grandparent of a profile-shaped value
     (``<root>/profiles/<name>``, mirrors ``get_default_hermes_root()``), the value itself otherwise,
-    *default_root* when unset. Pure: callers pass any process's env, not only ``os.environ``."""
+    *default_root* when unset. Pure: callers pass any process's env, not only ``os.environ``.
+
+    A stray export pointing at a directory that is NOT a hermes install root
+    (no identity markers, no live profiles/) falls back to *default_root* — it must
+    not hijack ``-p`` resolution (2026-09-24)."""
     env_home = env_home.strip()
     if not env_home:
         return default_root
     env_path = Path(env_home)
-    return env_path.parent.parent if env_path.parent.name == "profiles" else env_path
+    if env_path.parent.name == "profiles":
+        return env_path.parent.parent
+    try:
+        from hermes_constants import is_hermes_home_path
+
+        if is_hermes_home_path(env_path):
+            return env_path
+    except Exception:  # pragma: no cover — never break profile resolution on a predicate bug
+        return env_path
+    return default_root
 
 
 def resolve_profile_env(profile_name: str) -> str:

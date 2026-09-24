@@ -89,6 +89,17 @@ def _sanitize_single_tool(tool: dict) -> dict:
     if not isinstance(fn, dict):
         return out
     params = fn.get("parameters")
+    if not isinstance(params, dict):
+        # Anthropic-shaped tool defs carry ``input_schema`` instead of ``parameters``;
+        # canonicalize so strict OpenAI-compatible providers (opencode-go, DeepSeek)
+        # don't reject the whole request (2026-09-24).
+        input_schema = fn.get("input_schema")
+        if isinstance(input_schema, dict):
+            params = input_schema
+            fn["parameters"] = input_schema
+        else:
+            params = None
+        fn.pop("input_schema", None)
     if not isinstance(params, dict):  # missing / non-dict → minimal valid shape
         fn["parameters"] = _empty_object()
         return out

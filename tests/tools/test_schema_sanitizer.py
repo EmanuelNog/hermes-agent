@@ -591,3 +591,28 @@ def test_builtin_tool_without_required_gets_empty_required_list():
         "properties": {"opts": {"type": "object", "properties": {"k": {"type": "string"}}}},
     })])[0]["function"]["parameters"]
     assert nested["properties"]["opts"]["required"] == []
+
+
+def test_input_schema_mapped_to_parameters() -> None:
+    """Anthropic-shaped tool defs (function.input_schema, no parameters) must be
+    canonicalized to OpenAI `parameters` — opencode-go/DeepSeek reject the raw
+    input_schema shape with a whole-request 400 (regression 2026-09-24)."""
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "wikisearch",
+            "description": "search the wiki",
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+            },
+        },
+    }]
+    out = sanitize_tool_schemas(tools)
+    fn = out[0]["function"]
+    assert "parameters" in fn, "input_schema must be mapped to parameters"
+    assert "input_schema" not in fn, "input_schema must not survive into the OpenAI payload"
+    assert fn["parameters"]["type"] == "object"
+    assert fn["parameters"]["properties"]["q"]["type"] == "string"
+    assert fn["parameters"]["required"] == ["q"]

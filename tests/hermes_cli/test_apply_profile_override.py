@@ -335,3 +335,53 @@ class TestS6ContainerGatewayRun:
                 tmp_path, monkeypatch, hermes_home=str(root), active_profile="coder", argv=argv,
             )
             assert result == str(root / "profiles" / "coder"), argv
+
+
+class TestStrayHermesHomeFallback:
+    """HERMES_HOME pointing at a directory that is NOT a hermes home (no
+    identity markers, no profiles/) must not hijack `-p` resolution — the
+    profiles root falls back to the conventional ~/.hermes (regression
+    2026-09-24: 'Profile dailycheck does not exist' under HERMES_HOME=/home/agentuser)."""
+
+    def test_stray_hermes_home_falls_back_to_conventional_root(self, tmp_path, monkeypatch):
+        hermes_root = tmp_path / ".hermes"
+        hermes_root.mkdir(parents=True, exist_ok=True)
+        (hermes_root / "config.yaml").write_text("{}\n")
+        (hermes_root / "profiles" / "coder").mkdir(parents=True)
+        (hermes_root / "profiles" / "coder" / "config.yaml").write_text("{}\n")
+
+        stray = tmp_path / "stray-env-dir"
+        stray.mkdir(parents=True)
+
+        result = _run_apply_profile_override(
+            tmp_path,
+            monkeypatch,
+            hermes_home=str(stray),
+            active_profile=None,
+            argv=["hermes", "-p", "coder", "chat"],
+        )
+        assert result is not None
+        assert result.endswith(os.path.join("profiles", "coder")), (
+            f"-p must resolve under the conventional root, got: {result!r}"
+        )
+
+    def test_real_custom_root_is_still_honored(self, tmp_path, monkeypatch):
+        """A HERMES_HOME that IS a hermes install root (docker/custom layout,
+        carries identity markers) keeps its own profiles/."""
+        custom = tmp_path / "opt" / "data"
+        custom.mkdir(parents=True)
+        (custom / "config.yaml").write_text("{}\n")
+        (custom / "profiles" / "worker").mkdir(parents=True)
+        (custom / "profiles" / "worker" / "config.yaml").write_text("{}\n")
+
+        result = _run_apply_profile_override(
+            tmp_path,
+            monkeypatch,
+            hermes_home=str(custom),
+            active_profile=None,
+            argv=["hermes", "-p", "worker", "chat"],
+        )
+        assert result is not None
+        assert result == str(custom / "profiles" / "worker"), (
+            "a real custom hermes root must keep its own profiles tree"
+        )
