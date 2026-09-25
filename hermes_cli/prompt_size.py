@@ -134,10 +134,22 @@ def _compute_toolsets_breakdown(tools: List[Any]) -> List[Dict[str, Any]]:
     """
     from tools.registry import registry
 
+    def _label(name: str) -> str:
+        # Tools outside the toolset map: the deferred catalog bridge
+        # (tool_search/tool_describe/tool_call) and plugin-loaded tools.
+        if name in ("tool_search", "tool_describe", "tool_call"):
+            return "deferred"
+        try:
+            entry = registry.get_entry(name)
+        except Exception:
+            entry = None
+        return "(plugin)" if entry is not None else "(unknown)"
+
     tool_to_toolset = registry.get_tool_to_toolset_map()
     groups: Dict[str, Dict[str, Any]] = {}
     for tool in tools:
-        toolset = tool_to_toolset.get(_tool_name(tool)) or "(unknown)"
+        name = _tool_name(tool)
+        toolset = tool_to_toolset.get(name) or _label(name)
         group = groups.setdefault(toolset, {"toolset": toolset, "tool_count": 0, "json_bytes": 0})
         group["tool_count"] += 1
         group["json_bytes"] += _bytes(json.dumps(tool, ensure_ascii=False))

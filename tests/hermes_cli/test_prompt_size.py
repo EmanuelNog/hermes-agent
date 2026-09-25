@@ -11,6 +11,7 @@ from hermes_cli.prompt_size import (
     _SKILLS_BLOCK_RE,
     _build_inspection_agent,
     _compute_skills_breakdown,
+    _compute_toolsets_breakdown,
     compute_prompt_breakdown,
     render_breakdown,
 )
@@ -62,6 +63,28 @@ def test_runs_offline_without_credentials(isolated_home, monkeypatch):
 
 
 
+
+
+def test_toolsets_breakdown_labels_deferred_and_plugin_tools(isolated_home, monkeypatch):
+    """Tools outside the toolset map are grouped as 'deferred' (catalog bridge)
+    or '(plugin)' (plugin-loaded) — never bare "(unknown)"."""
+    from tools.registry import registry
+
+    monkeypatch.setattr(registry, "get_tool_to_toolset_map", lambda: {})
+    monkeypatch.setattr(
+        registry, "get_entry",
+        lambda n: SimpleNamespace(toolset=None) if n.startswith("ai_memory_") else None,
+    )
+    tools = [
+        {"name": n}
+        for n in ("tool_search", "tool_describe", "tool_call",
+                  "ai_memory_search", "ai_memory_write", "ai_memory_status")
+    ]
+    groups = _compute_toolsets_breakdown(tools)
+    labels = {g["toolset"] for g in groups}
+    assert "(unknown)" not in labels
+    assert "deferred" in labels
+    assert "(plugin)" in labels
 
 
 def test_skills_breakdown_shape_sorted_and_attributed(isolated_home):
