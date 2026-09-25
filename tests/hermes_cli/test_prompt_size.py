@@ -71,10 +71,6 @@ def test_toolsets_breakdown_labels_deferred_and_plugin_tools(isolated_home, monk
     from tools.registry import registry
 
     monkeypatch.setattr(registry, "get_tool_to_toolset_map", lambda: {})
-    monkeypatch.setattr(
-        registry, "get_entry",
-        lambda n: SimpleNamespace(toolset=None) if n.startswith("ai_memory_") else None,
-    )
     tools = [
         {"name": n}
         for n in ("tool_search", "tool_describe", "tool_call",

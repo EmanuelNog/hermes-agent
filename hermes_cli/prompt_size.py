@@ -136,14 +136,11 @@ def _compute_toolsets_breakdown(tools: List[Any]) -> List[Dict[str, Any]]:
 
     def _label(name: str) -> str:
         # Tools outside the toolset map: the deferred catalog bridge
-        # (tool_search/tool_describe/tool_call) and plugin-loaded tools.
+        # (tool_search/tool_describe/tool_call) and plugin-loaded tools
+        # (plugins feed tools into assembly without registry entries).
         if name in ("tool_search", "tool_describe", "tool_call"):
             return "deferred"
-        try:
-            entry = registry.get_entry(name)
-        except Exception:
-            entry = None
-        return "(plugin)" if entry is not None else "(unknown)"
+        return "(plugin)"
 
     tool_to_toolset = registry.get_tool_to_toolset_map()
     groups: Dict[str, Dict[str, Any]] = {}
