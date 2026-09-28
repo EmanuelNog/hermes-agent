@@ -247,6 +247,11 @@ def launch_prefetch_compression(
     idle_timeout, total_ceiling = resolve_context_compression_timeouts()
     fence = CompressionCommitFence()
     fence.set_total_ceiling_seconds(max(float(total_ceiling), float(idle_timeout)))
+    # Tag the fence: the shared pipeline reads this to keep the blocking-mode client
+    # statuses (start / heartbeat / terminal edge) quiet for this background run —
+    # the arm already emitted the "(prefetch)" line, and the adoption/failure
+    # reporting below is the terminal edge for this worker.
+    fence.prefetch_worker = True
     # Shallow freeze: the live list may keep growing; the snapshot never does.
     snapshot = list(messages)
     arm_index = len(messages)

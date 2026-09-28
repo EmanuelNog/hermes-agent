@@ -126,6 +126,15 @@ after Xs (reason)` via `_emit_warning`. Templates live in
 blocking statuses (suppressed on chat surfaces by default, deliverable with
 `compression.progress_notices`, failure always visible).
 
+The blocking-mode registers stay SILENT for the background run: the worker's
+fence is tagged (`prefetch_worker`), and the shared pipeline's
+`_announce_compression_start(emit_client_status=False)` skips the routine start
+status — which in turn silences the activity heartbeats and the terminal edge
+(`status_emitted=False` carries through the existing quiet-engine chain). The
+prefetch arm/done/failure lines above are the only client-visible lifecycle for
+a worker run; a user must never see the "so I can continue" blocking register
+while the loop keeps working.
+
 ### Safety notes (from the implementation audit)
 
 - `/stop` cancels the worker before its commit via the published fence.

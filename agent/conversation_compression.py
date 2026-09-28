@@ -3996,9 +3996,13 @@ def _route_codex_compaction(
 
 
 def _announce_compression_start(
-    agent: Any, *, message_count: int, approx_tokens: Optional[int], focus_topic: Optional[str], force: bool
+    agent: Any, *, message_count: int, approx_tokens: Optional[int], focus_topic: Optional[str], force: bool,
+    emit_client_status: bool = True,
 ) -> _CompactionLifecycle:
-    """Log the attempt, emit the (engine-customisable) compacting status, return the lifecycle."""
+    """Log the attempt, emit the (engine-customisable) compacting status, return the lifecycle.
+    ``emit_client_status=False`` keeps a BACKGROUND run quiet: no start status, and the
+    lifecycle stays un-emitted so the activity heartbeats and the terminal edge follow it
+    into silence (the prefetch arm already announced the background summary)."""
     logger.info(
         "context compression started: session=%s messages=%d tokens=~%s model=%s focus=%r", agent.session_id or "none",
         message_count, f"{approx_tokens:,}" if approx_tokens else "unknown", agent.model, focus_topic,
@@ -4009,9 +4013,9 @@ def _announce_compression_start(
             agent.context_compressor, phase="compress", default_message=status, approx_tokens=approx_tokens,
             message_count=message_count, model=agent.model, focus_topic=focus_topic,
         )
-    if status:
+    if status and emit_client_status:
         agent._emit_status(status)
-    return _CompactionLifecycle(agent, bool(status))
+    return _CompactionLifecycle(agent, bool(status) and emit_client_status)
 
 
 def compress_context(
@@ -4070,8 +4074,12 @@ def compress_context(
     # Announce BEFORE the lazy feasibility probe: its live catalog / provider lookups are
     # network-bound (connect timeouts stack up through proxies), and until this status lands
     # the Desktop working row is a bare spinner with no "Summarizing thread" label (#111294).
+    # Prefetch: a background worker's fence carries `prefetch_worker` -> keep this run quiet
+    # (the arm already emitted the "(prefetch)" line; the quiet lifecycle also silences its
+    # activity heartbeats and terminal edge).
     lifecycle = _announce_compression_start(
-        agent, message_count=_pre_msg_count, approx_tokens=approx_tokens, focus_topic=focus_topic, force=force
+        agent, message_count=_pre_msg_count, approx_tokens=approx_tokens, focus_topic=focus_topic, force=force,
+        emit_client_status=not bool(getattr(commit_fence, "prefetch_worker", False)),
     )
     # Lazy feasibility probe (~400ms cold) on first attempt, not __init__; it sets
     # _compression_warning so status replay still surfaces the warning. Marked checked

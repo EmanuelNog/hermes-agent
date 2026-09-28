@@ -476,6 +476,87 @@ def test_launch_arms_publishes_fence_and_releases_admission(monkeypatch):
     assert "Compacting context (prefetch)" in _m and "~4,600 tokens" in _m
 
 
+def test_launch_tags_fence_as_background_prefetch(monkeypatch):
+    # The worker's fence carries the marker the shared pipeline reads to keep the
+    # blocking-mode client statuses quiet for background runs.
+    _fake_cc(monkeypatch, result=([], ""))
+    agent = _agent()
+    state = tac.launch_prefetch_compression(agent, _arm_msgs(), "s", 4_600)
+    assert state is not None
+    assert state.fence.prefetch_worker is True
+
+
+def test_background_worker_status_registers_stay_quiet():
+    # emit_client_status=False is what the shared pipeline passes for the prefetch
+    # worker: no blocking-mode start status, a quiet lifecycle (heartbeats follow
+    # status_emitted) and no terminal edge — the arm/done/failure lines are the
+    # only client-visible prefetch reports.
+    from agent.conversation_compression import COMPACTION_STATUS, _announce_compression_start
+
+    a = SimpleNamespace(
+        status_events=[], callback_events=[], session_id="s-quiet", model="m",
+    )
+    a._emit_status = lambda m: a.status_events.append(m)
+    a.status_callback = lambda kind, msg: a.callback_events.append((kind, msg))
+
+    lifecycle = _announce_compression_start(
+        a, message_count=3, approx_tokens=1_000, focus_topic=None, force=True,
+        emit_client_status=False,
+    )
+    assert a.status_events == []
+    assert lifecycle.status_emitted is False
+    lifecycle.commit_status = "committed"
+    lifecycle.complete()
+    assert a.callback_events == []
+
+    # Control: the default path still emits the blocking registers unchanged.
+    lifecycle = _announce_compression_start(
+        a, message_count=3, approx_tokens=1_000, focus_topic=None, force=True,
+    )
+    assert lifecycle.status_emitted is True
+    assert a.status_events == [COMPACTION_STATUS]
+    lifecycle.commit_status = "committed"
+    lifecycle.complete()
+    assert [k for k, _ in a.callback_events] == ["compacted"]
+
+
+def test_compress_context_quiets_only_tagged_background_fences(monkeypatch):
+    # Call-site wiring: an untagged fence (every blocking/manual call) keeps the
+    # client registers; a fence tagged `prefetch_worker` (only
+    # launch_prefetch_compression tags one) passes emit_client_status=False.
+    import agent.conversation_compression as cc
+
+    seen = []
+    real_announce = cc._announce_compression_start
+
+    def _spy(agent, **kwargs):
+        seen.append(kwargs.get("emit_client_status"))
+        return real_announce(agent, **kwargs)
+
+    monkeypatch.setattr(cc, "_announce_compression_start", _spy)
+    # Reach the announce, then abort cleanly (lease depth is covered elsewhere).
+    monkeypatch.setattr(cc, "_acquire_compression_lease", lambda *a, **k: (None, "abort"))
+
+    a = _agent()
+    a.session_id, a.model = "s-wire", "m"
+    a._compression_feasibility_checked = True
+    msgs = [{"role": "user", "content": "x"}]
+
+    cc.compress_context(
+        a, list(msgs), "sys", approx_tokens=10, task_id="t", force=True,
+        commit_fence=cc.CompressionCommitFence(),
+    )
+    assert seen == [True]
+
+    tagged = cc.CompressionCommitFence()
+    tagged.prefetch_worker = True
+    cc.compress_context(
+        a, list(msgs), "sys", approx_tokens=10, task_id="t", force=True,
+        commit_fence=tagged,
+    )
+    assert seen == [True, False]
+
+
 def test_launch_refused_when_already_pending(monkeypatch):
     st = _fake_cc(monkeypatch, result=([], ""))
     agent = _agent(prefetch_compaction_pending=object())

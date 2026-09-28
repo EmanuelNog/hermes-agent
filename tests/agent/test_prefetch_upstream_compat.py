@@ -59,6 +59,15 @@ def test_compress_context_keyword_contract():
     _expect_param(fn, "commit_fence", "prefetch fences its worker for /stop")
 
 
+def test_announce_client_status_gate_contract():
+    """_announce_compression_start must keep the emit_client_status gate the fork
+    passes (False on the background worker) so a prefetch run never wears the
+    blocking-mode start/heartbeat/terminal registers."""
+    fn = _expect_callable("agent.conversation_compression", "_announce_compression_start")
+    _expect_param(fn, "emit_client_status", "prefetch passes False for background runs")
+    assert inspect.signature(fn).parameters["emit_client_status"].default is True
+
+
 def test_fence_api_contract():
     """The commit fence must keep the methods the prefetch launch uses."""
     Fence = pytest.importorskip("agent.conversation_compression").CompressionCommitFence
