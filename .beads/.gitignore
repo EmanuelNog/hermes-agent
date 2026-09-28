@@ -80,3 +80,8 @@ bd.db
 dolt*
 .br_recovery/
 *.tmp
+
+# br runtime artifacts (jsonl history/base snapshots)
+.br_history/
+beads.base.jsonl
+interactions.jsonl
