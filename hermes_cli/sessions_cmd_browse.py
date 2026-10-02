@@ -38,6 +38,23 @@ def _msgs_str(s: dict) -> str:
     return str(msgs) if isinstance(msgs, int) else "-"
 
 
+def _tokens_str(s: dict) -> str:
+    """Total tokens (input+output+cache reads/writes+reasoning) as a compact magnitude string."""
+    vals = [v for k in ("input_tokens", "output_tokens", "cache_read_tokens",
+                        "cache_write_tokens", "reasoning_tokens")
+            if isinstance((v := s.get(k)), int)]
+    if not vals:
+        return "-"
+    tot = sum(vals)
+    if tot >= 1_000_000_000:
+        return f"{tot / 1e9:.2f}B"
+    if tot >= 1_000_000:
+        return f"{tot / 1e6:.1f}M"
+    if tot >= 1_000:
+        return f"{tot / 1e3:.0f}k"
+    return str(tot)
+
+
 def _match(s: dict, query: str) -> bool:
     """Case-insensitive substring match over title / preview / id / source."""
     q = query.lower()
@@ -49,8 +66,8 @@ def _match(s: dict, query: str) -> bool:
     )
 
 
-# Layout: [arrow 3] [title/preview flexible] [status 5] [msgs 5] [active 12] [src 6] [id 18]
-_FIXED_COLS = 3 + 5 + 2 + 5 + 2 + 12 + 6 + 18 + 6
+# Layout: [arrow 3] [title/preview flexible] [status 5] [msgs 5] [tokens 9] [active 12] [src 6] [id 18]
+_FIXED_COLS = 3 + 5 + 2 + 5 + 2 + 9 + 2 + 12 + 6 + 18 + 6
 
 
 def _format_row(s: dict, max_x: int) -> str:
@@ -59,7 +76,7 @@ def _format_row(s: dict, max_x: int) -> str:
     name = ((s.get("title") or "").strip() or (s.get("preview") or "").strip())[:name_width] or sid
     return (
         f"{name:<{name_width}}  {_session_status_tag(s.get('_status')):<5}  "
-        f"{_msgs_str(s):>5}  {_relative_time(s.get('last_active'), session_id=s['id']):<10}  "
+        f"{_msgs_str(s):>5}  {_tokens_str(s):>9}  {_relative_time(s.get('last_active'), session_id=s['id']):<10}  "
         f"{s.get('source', '')[:6]:<5} {sid}"
     )
 
@@ -104,7 +121,8 @@ class _CursesBrowser:
         self._put(stdscr, 0, 0, header, max_x - 1, header_attr)
         name_width = max(20, max_x - _FIXED_COLS)
         col_header = (
-            f"   {'Title / Preview':<{name_width}}  {'Stat':<5}  {'Msgs':>5}  {'Active':<10}  {'Src':<5} {'ID'}"
+            f"   {'Title / Preview':<{name_width}}  {'Stat':<5}  {'Msgs':>5}  {'Tokens':>9}  "
+            f"{'Active':<10}  {'Src':<5} {'ID'}"
         )
         self._put(stdscr, 1, 0, col_header, max_x - 1, self._pair(4, c.A_DIM))
         visible_rows = max(max_y - 4, 1)  # header + col header + blank + footer
@@ -224,7 +242,8 @@ def _fallback_picker(sessions: list) -> Optional[str]:
     for i, s in enumerate(sessions):
         print(
             f"  {i + 1:>3}. {_clip(_label(s), 50):<50}  {_session_status_tag(s.get('_status')):<5}  "
-            f"{_msgs_str(s):>5}  {_relative_time(s.get('last_active'), session_id=s['id']):<10}  {s.get('source', '')[:6]}"
+            f"{_msgs_str(s):>5}  {_tokens_str(s):>9}  "
+            f"{_relative_time(s.get('last_active'), session_id=s['id']):<10}  {s.get('source', '')[:6]}"
         )
     while True:
         try:
