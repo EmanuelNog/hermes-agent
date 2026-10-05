@@ -47,7 +47,9 @@ class OpenCodeGoProfile(ProviderProfile):
 
     # The relay's default max_tokens (262144) exceeds what Xiaomi accepts for
     # mimo-v2.5-pro and 400s; keys are normalized via _flat_model_name().
-    _MODEL_MAX_TOKENS: dict[str, int] = {"mimo-v2.5-pro": 131072}
+    # deepseek-v4-flash: the provider's default output cap truncates long
+    # agent reports (subagent summaries hit it repeatedly) — raise to 16k.
+    _MODEL_MAX_TOKENS: dict[str, int] = {"mimo-v2.5-pro": 131072, "deepseek-v4-flash": 16384}
 
     def get_max_tokens(self, model: str | None) -> int | None:
         cap = self._MODEL_MAX_TOKENS.get(_flat_model_name(model))
