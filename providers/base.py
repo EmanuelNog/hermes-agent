@@ -131,7 +131,11 @@ class ProviderProfile:
     # ── Request-level quirks ─────────────────────────────────
     # Temperature: None = use caller's default, OMIT_TEMPERATURE = don't send
     fixed_temperature: Any = None
-    default_max_tokens: int | None = None
+    # Global output cap when a profile/model does not declare one: 16384.
+    # The relay/portal defaults (262144) truncate long agent reports on some
+    # models and 400 on others; 16k is the tested middle ground (2026-10-05,
+    # user decision: global default, re-evaluate after a trial period).
+    default_max_tokens: int | None = 16384
     # ``response_format`` types the API rejects outright (e.g. ("json_schema",)); aux requests omit them up front.
     unsupported_response_formats: tuple = ()
     default_aux_model: str = (
