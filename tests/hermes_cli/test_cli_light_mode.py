@@ -544,3 +544,52 @@ class TestSkinReloadOnRefresh:
         monkeypatch.setattr(cli_mod, "_cprint", lambda *a, **k: None)
         cli._cmd_redraw("/redraw")
         assert events == ["theme", "redraw"]
+
+
+class TestRedrawReRenderOnThemeRefresh:
+    """Regression: after a theme refresh, /redraw must re-render past content
+    from the session store (current skin) instead of replaying the ANSI-baked
+    output history — recorded escapes carry the PREVIOUS theme's colors, so a
+    plain replay repaints stale colors (a fresh session was the only fix)."""
+
+    def test_cmd_redraw_rerecords_history_when_refreshed(self, cli_mod, monkeypatch):
+        from cli import HermesCLI
+
+        cli = object.__new__(HermesCLI)
+        events = []
+        monkeypatch.setattr(cli, "resume_display", "full", raising=False)
+        monkeypatch.setattr(cli, "_force_full_redraw", lambda: events.append("redraw"))
+        monkeypatch.setattr(cli_mod, "_refresh_theme", lambda: True)
+        monkeypatch.setattr(cli, "_display_resumed_history", lambda: events.append("recap"))
+        monkeypatch.setattr(cli_mod, "_clear_output_history", lambda: events.append("clear"))
+        monkeypatch.setattr(cli_mod, "_cprint", lambda *a, **k: None)
+        cli._cmd_redraw("/redraw")
+        assert events == ["clear", "recap", "redraw"]
+
+    def test_cmd_redraw_keeps_history_when_not_refreshed(self, cli_mod, monkeypatch):
+        from cli import HermesCLI
+
+        cli = object.__new__(HermesCLI)
+        events = []
+        monkeypatch.setattr(cli, "_force_full_redraw", lambda: events.append("redraw"))
+        monkeypatch.setattr(cli_mod, "_refresh_theme", lambda: False)
+        never = lambda *a, **k: events.append("recap")  # noqa: E731
+        monkeypatch.setattr(cli, "_display_resumed_history", never)
+        monkeypatch.setattr(cli_mod, "_clear_output_history", lambda: events.append("clear"))
+        monkeypatch.setattr(cli_mod, "_cprint", lambda *a, **k: None)
+        cli._cmd_redraw("/redraw")
+        assert events == ["redraw"]
+
+    def test_cmd_redraw_skips_rerecord_in_minimal_mode(self, cli_mod, monkeypatch):
+        from cli import HermesCLI
+
+        cli = object.__new__(HermesCLI)
+        events = []
+        monkeypatch.setattr(cli, "resume_display", "minimal", raising=False)
+        monkeypatch.setattr(cli, "_force_full_redraw", lambda: events.append("redraw"))
+        monkeypatch.setattr(cli_mod, "_refresh_theme", lambda: True)
+        monkeypatch.setattr(cli, "_display_resumed_history", lambda: events.append("recap"))
+        monkeypatch.setattr(cli_mod, "_clear_output_history", lambda: events.append("clear"))
+        monkeypatch.setattr(cli_mod, "_cprint", lambda *a, **k: None)
+        cli._cmd_redraw("/redraw")
+        assert events == ["redraw"]
