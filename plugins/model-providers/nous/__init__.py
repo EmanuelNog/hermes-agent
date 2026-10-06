@@ -64,6 +64,16 @@ class NousProfile(ProviderProfile):
         if rc.get("enabled") is False and self._cannot_disable_reasoning(model):
             return {}, {}
         return {"reasoning": rc}, {}
+    _MODEL_MAX_TOKENS: dict[str, int] = {}
+
+    def get_max_tokens(self, model: str | None) -> int | None:
+        """Cap the flash family's output - the Portal default truncates long
+        agent reports; prefix match covers versioned pins (-0731) too."""
+        m = (model or "").strip().lower()
+        if m.startswith("deepseek-v4-flash"):
+            return 16384
+        return self.default_max_tokens
+
 
 
 nous = NousProfile(
