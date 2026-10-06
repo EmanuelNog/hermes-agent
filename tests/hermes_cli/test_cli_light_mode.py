@@ -428,3 +428,79 @@ class TestOsc11Da1Fence:
         result, leftover = _run_osc11_child(lambda age: None, repo_root)
         assert result == "None"
         assert leftover == "b''"
+
+
+class TestLightModeRefresh:
+    """Regression: a running session must re-detect light mode when the
+    terminal theme changes (omarchy light/dark switches the OSC 11
+    background). PRECEDING BUG: _LIGHT_MODE_CACHE was primed once at startup
+    and only a session restart re-ran detection — /redraw repainted with the
+    stale mode."""
+
+    def test_refresh_replaces_sticky_cache(self, cli_mod, monkeypatch):
+        monkeypatch.setenv("HERMES_LIGHT", "1")
+        assert cli_mod._detect_light_mode() is True
+        # Theme flips while the session runs; the sticky cache still reports
+        # the OLD mode until something refreshes it.
+        monkeypatch.setenv("HERMES_LIGHT", "0")
+        monkeypatch.delenv("HERMES_TUI_LIGHT", raising=False)
+        monkeypatch.delenv("HERMES_TUI_THEME", raising=False)
+        monkeypatch.delenv("HERMES_TUI_BACKGROUND", raising=False)
+        monkeypatch.delenv("COLORFGBG", raising=False)
+        assert cli_mod._detect_light_mode() is True  # stale
+        assert cli_mod._refresh_light_mode() is False
+        assert cli_mod._detect_light_mode() is False
+
+    def test_refresh_keeps_cache_when_detection_fails(self, cli_mod, monkeypatch):
+        monkeypatch.setenv("HERMES_LIGHT", "1")
+        assert cli_mod._detect_light_mode() is True
+
+        def _boom():
+            raise RuntimeError("tty disappeared")
+
+        monkeypatch.setattr(cli_mod, "_detect_light_mode_uncached", _boom)
+        assert cli_mod._refresh_light_mode() is None
+        assert cli_mod._detect_light_mode() is True
+
+    def test_refresh_drops_cached_ansi_skins(self, cli_mod, monkeypatch):
+        from hermes_cli.cli_render import _ACCENT
+
+        cli_mod._LIGHT_MODE_CACHE = True
+        light_ansi = str(_ACCENT)
+        assert _ACCENT._cached is not None
+        monkeypatch.setenv("HERMES_LIGHT", "0")
+        assert cli_mod._refresh_light_mode() is False
+        assert _ACCENT._cached is None
+        dark_ansi = str(_ACCENT)
+        assert dark_ansi != light_ansi
+
+    def test_reset_skin_ansi_caches_clears_every_instance(self, cli_mod, monkeypatch):
+        from hermes_cli.cli_render import (
+            _SKIN_AWARE_ANSI_INSTANCES,
+            _SkinAwareAnsi,
+            reset_skin_ansi_caches,
+        )
+
+        inst = _SkinAwareAnsi("response_border", "#FFD700", bold=True)
+        try:
+            str(inst)
+            assert inst._cached is not None
+            reset_skin_ansi_caches()
+            assert inst._cached is None
+        finally:
+            # Keep the module registry clean for other tests.
+            try:
+                _SKIN_AWARE_ANSI_INSTANCES.remove(inst)
+            except ValueError:
+                pass
+
+    def test_cmd_redraw_refreshes_then_repaints(self, cli_mod, monkeypatch):
+        from cli import HermesCLI
+
+        cli = object.__new__(HermesCLI)
+        events = []
+        monkeypatch.setattr(cli, "_force_full_redraw", lambda: events.append("redraw"))
+        monkeypatch.setattr(cli_mod, "_refresh_light_mode", lambda: events.append("refresh"))
+        monkeypatch.setattr(cli_mod, "_cprint", lambda *a, **k: None)
+        cli._cmd_redraw("/redraw")
+        assert events == ["refresh", "redraw"]

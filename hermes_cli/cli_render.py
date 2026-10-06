@@ -310,6 +310,9 @@ def _install_skin_light_mode_hook() -> None:
     SkinConfig._hermes_light_mode_hook_installed = True  # type: ignore[attr-defined]
 
 
+_SKIN_AWARE_ANSI_INSTANCES: list["_SkinAwareAnsi"] = []
+
+
 class _SkinAwareAnsi:
     """Lazy ANSI escape resolved from the skin on first use; ``.reset()`` after a ``/skin`` switch."""
 
@@ -318,6 +321,7 @@ class _SkinAwareAnsi:
         self._fallback_hex = fallback_hex
         self._bold = bold
         self._cached: str | None = None
+        _SKIN_AWARE_ANSI_INSTANCES.append(self)
 
     def __str__(self) -> str:
         from cli import _hex_to_ansi
@@ -341,6 +345,16 @@ class _SkinAwareAnsi:
     def reset(self) -> None:
         """Clear cache so the next access re-reads the skin."""
         self._cached = None
+
+
+def reset_skin_ansi_caches() -> None:
+    """Clear every ``_SkinAwareAnsi`` cache so the next access re-reads the skin.
+
+    Called after a light-mode refresh (``/redraw`` after a terminal theme
+    switch) so lazily cached ANSI escapes resolve with the new palette.
+    """
+    for inst in _SKIN_AWARE_ANSI_INSTANCES:
+        inst.reset()
 
 
 _ACCENT = _SkinAwareAnsi("response_border", "#FFD700", bold=True)

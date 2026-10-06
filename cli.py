@@ -626,6 +626,25 @@ def _detect_light_mode() -> bool:
     return result
 
 
+def _refresh_light_mode() -> bool | None:
+    """Re-run light-mode detection after a terminal theme switch (env + OSC 11
+    background) and drop the cached ANSI skins so the next paints use the new
+    palette. Called by ``/redraw``. Returns the new mode, or None when
+    detection failed (the previous cache is kept)."""
+    global _LIGHT_MODE_CACHE
+    try:
+        result = _detect_light_mode_uncached()
+    except Exception:
+        return None
+    _LIGHT_MODE_CACHE = result
+    try:
+        from hermes_cli.cli_render import reset_skin_ansi_caches
+        reset_skin_ansi_caches()
+    except Exception:
+        pass
+    return result
+
+
 _install_skin_light_mode_hook()
 
 
