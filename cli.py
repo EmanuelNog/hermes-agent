@@ -645,6 +645,31 @@ def _refresh_light_mode() -> bool | None:
     return result
 
 
+def _refresh_theme() -> bool:
+    """Full theme refresh for a running TUI after an external theme switch
+    (e.g. Omarchy): re-detect light/dark (env + OSC 11) and reload the active
+    file-backed skin when it changed on disk, dropping cached ANSI skins so
+    the next paints use the new palette. Best-effort; returns True when
+    anything was refreshed."""
+    changed = False
+    try:
+        changed = _refresh_light_mode() is not None or changed
+    except Exception:
+        pass
+    try:
+        from hermes_cli.skin_engine import reload_active_skin_if_changed
+        changed = reload_active_skin_if_changed() or changed
+    except Exception:
+        pass
+    if changed:
+        try:
+            from hermes_cli.cli_render import reset_skin_ansi_caches
+            reset_skin_ansi_caches()
+        except Exception:
+            pass
+    return changed
+
+
 _install_skin_light_mode_hook()
 
 

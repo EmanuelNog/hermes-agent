@@ -69,12 +69,13 @@ class CLILoopsMixin:
     def _cmd_redraw(self, cmd_original: str):
         # Manual recovery for terminal buffer drift (mux tab switches, subshell ``clear``,
         # SSH restores; #8688). Ctrl+L is bound to the same helper.
-        from cli import _DIM, _RST, _cprint, _refresh_light_mode
+        from cli import _DIM, _RST, _cprint, _refresh_theme
         # A terminal theme switch (e.g. omarchy light/dark) changes the OSC 11
-        # background; re-detect so the repaint uses the new colors without a
-        # session restart. Kept best-effort: a failed probe keeps the old cache.
+        # background and the on-disk skin; refresh both so the repaint uses the
+        # new colors without a session restart. Kept best-effort: a failed
+        # probe/load keeps the previous palette.
         try:
-            _refresh_light_mode()
+            _refresh_theme()
         except Exception:
             pass
         self._force_full_redraw()

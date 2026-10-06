@@ -504,3 +504,43 @@ class TestLightModeRefresh:
         monkeypatch.setattr(cli_mod, "_cprint", lambda *a, **k: None)
         cli._cmd_redraw("/redraw")
         assert events == ["refresh", "redraw"]
+
+
+class TestSkinReloadOnRefresh:
+    """Regression: a file-backed skin (e.g. omarchy's hermes.yaml) must be
+    re-read when it changes on disk (theme switch) — /redraw must adopt the
+    new palette without a session restart."""
+
+    def test_reload_active_skin_rebuilds_on_mtime_change(self, cli_mod, monkeypatch, tmp_path):
+        from hermes_cli import skin_engine
+
+        monkeypatch.setattr(skin_engine, "_skins_dir", lambda: tmp_path)
+        skin_file = tmp_path / "omarchy.yaml"
+        skin_file.write_text("name: omarchy\ndescription: t\ncolors:\n  response_border: \"#111111\"\n")
+        skin_engine.set_active_skin("omarchy")
+        assert skin_engine.get_active_skin().get_color("response_border") == "#111111"
+
+        skin_file.write_text("name: omarchy\ndescription: t\ncolors:\n  response_border: \"#ABCDEF\"\n")
+        monkeypatch.setattr(skin_engine, "_skins_dir", lambda: tmp_path)  # keep latest dir ref
+        assert skin_engine.reload_active_skin_if_changed() is True
+        assert skin_engine.get_active_skin().get_color("response_border") == "#ABCDEF"
+        # A second call with nothing changed must be a no-op.
+        assert skin_engine.reload_active_skin_if_changed() is False
+
+    def test_reload_is_noop_for_builtin_skin(self, cli_mod, monkeypatch, tmp_path):
+        from hermes_cli import skin_engine
+
+        monkeypatch.setattr(skin_engine, "_skins_dir", lambda: tmp_path)
+        skin_engine.set_active_skin("default")
+        assert skin_engine.reload_active_skin_if_changed() is False
+
+    def test_cmd_redraw_refreshes_theme(self, cli_mod, monkeypatch):
+        from cli import HermesCLI
+
+        cli = object.__new__(HermesCLI)
+        events = []
+        monkeypatch.setattr(cli, "_force_full_redraw", lambda: events.append("redraw"))
+        monkeypatch.setattr(cli_mod, "_refresh_theme", lambda: events.append("theme"))
+        monkeypatch.setattr(cli_mod, "_cprint", lambda *a, **k: None)
+        cli._cmd_redraw("/redraw")
+        assert events == ["theme", "redraw"]
