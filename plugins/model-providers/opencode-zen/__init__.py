@@ -113,6 +113,14 @@ class OpenCodeGoProfile(ProviderProfile):
 class OpenCodeZenProfile(ProviderProfile):
     """OpenCode Zen - model-specific reasoning controls."""
 
+    # deepseek-v4-flash: 128k headroom for long analysis turns (the 16k default
+    # clipped reasoning-heavy reports; session 20261004_234220_423e04).
+    _MODEL_MAX_TOKENS: dict[str, int] = {"deepseek-v4-flash": 131072}
+
+    def get_max_tokens(self, model: str | None) -> int | None:
+        cap = self._MODEL_MAX_TOKENS.get(_flat_model_name(model))
+        return self.default_max_tokens if cap is None else cap
+
     def build_api_kwargs_extras(
         self, *, reasoning_config: dict | None = None, model: str | None = None, **context
     ) -> tuple[dict[str, Any], dict[str, Any]]:
