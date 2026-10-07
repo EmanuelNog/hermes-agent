@@ -309,3 +309,15 @@ def test_opencode_go_plan_windows_reach_usage_through_profile_hook(opencode_go_p
     assert [(w.label, w.used_percent) for w in snapshot.windows] == [
         ("Rolling window", 3.0), ("Weekly", 2.0), ("Monthly", 2.0)]
     assert snapshot.windows[0].reset_at == datetime(2026, 9, 16, 21, 44, 55, 176000, tzinfo=timezone.utc)
+
+
+class TestDeepseekFlashOutputCap:
+    """Regression: the deepseek-v4-flash output cap must leave headroom for
+    long analysis turns. The 16k cap (2026-10-04) clipped session
+    20261004_234220_423e04 — single turns ran ~15–16k tokens of reasoning
+    alone (61k chars, finish_reason=length) with zero visible text and every
+    continuation attempt burned its budget the same way."""
+
+    def test_cap_has_headroom_for_long_reports(self, opencode_zen_profile):
+        cap = opencode_zen_profile.get_max_tokens("deepseek-v4-flash")
+        assert cap is not None and cap >= 65536, f"cap too low: {cap}"
