@@ -343,6 +343,8 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
 
 _active_skin: Optional[SkinConfig] = None
 _active_skin_name: str = "default"
+# mtime of each user skin's YAML at last load; drives reload_active_skin_if_changed().
+_skin_source_mtimes: Dict[str, float] = {}
 # Routed multiplex profiles: (name, skin) per home key. ``display.skin`` and ``<home>/skins/*.yaml``
 # are per profile, and the relay display name / TUI skin payload are read under each profile's
 # override — one module slot would be last-writer-wins across profiles. Unscoped keeps the module slot.
@@ -425,6 +427,11 @@ def load_skin(name: str) -> SkinConfig:
     """Load a skin by name: user skins first, then built-in, then default."""
     user_file = _skins_dir() / f"{name}.yaml"
     data = _load_skin_from_yaml(user_file) if user_file.is_file() else None
+    if data:
+        try:
+            _skin_source_mtimes[name] = user_file.stat().st_mtime
+        except OSError:
+            pass
     if not data and name not in _BUILTIN_SKINS:
         logger.warning("Skin '%s' not found, using default", name)
     return _build_skin_config(data or _BUILTIN_SKINS.get(name) or _BUILTIN_SKINS["default"])
@@ -457,6 +464,30 @@ def set_active_skin(name: str) -> SkinConfig:
     _active_skin_name = name
     _active_skin = skin
     return _active_skin
+
+
+def reload_active_skin_if_changed() -> bool:
+    """Re-read the active skin's YAML when its file changed on disk (e.g. an
+    Omarchy theme switch under a running session). Replaces the cached config
+    in place; returns True when a reload actually happened."""
+    global _active_skin
+    name = get_active_skin_name()
+    user_file = _skins_dir() / f"{name}.yaml"
+    try:
+        mtime = user_file.stat().st_mtime
+    except OSError:
+        return False
+    if _skin_source_mtimes.get(name) == mtime:
+        return False
+    data = _load_skin_from_yaml(user_file)
+    if not data:
+        return False
+    fresh = _build_skin_config(data)
+    if fresh.name != name:
+        return False
+    _skin_source_mtimes[name] = mtime
+    _active_skin = fresh
+    return True
 
 
 def get_active_skin_name() -> str:
