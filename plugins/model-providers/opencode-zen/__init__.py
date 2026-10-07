@@ -51,7 +51,7 @@ class OpenCodeGoProfile(ProviderProfile):
     # turns whose reasoning alone ran ~15-16k tokens (session
     # 20261004_234220_423e04: finish_reason=length, zero visible text, every
     # continuation burned its budget the same way).
-    _MODEL_MAX_TOKENS: dict[str, int] = {"mimo-v2.5-pro": 131072, "deepseek-v4-flash": 65536}
+    _MODEL_MAX_TOKENS: dict[str, int] = {"mimo-v2.5-pro": 131072, "deepseek-v4-flash": 131072}
 
     def get_max_tokens(self, model: str | None) -> int | None:
         cap = self._MODEL_MAX_TOKENS.get(_flat_model_name(model))
