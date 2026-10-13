@@ -137,5 +137,18 @@ opencode_go = OpenCodeGoProfile(
     supports_vision_tool_messages=False,
 )
 
+# Second Go subscription/workspace — distinct registered provider so the fallback walk
+# treats it as a separate backend (agent/backend_identity.py: distinct registry entries
+# sharing an inference host still have distinct credential surfaces). Key env:
+# OPENCODE_GO_API_KEY_2 (user-chosen name, 2026-10-13).
+opencode_go_2 = OpenCodeGoProfile(
+    name="opencode-go-2", aliases=("opencode_go_2", "go2"),
+    env_vars=("OPENCODE_GO_API_KEY_2",),
+    base_url="https://opencode.ai/zen/go/v1", default_headers=dict(_ATTRIBUTION_HEADERS),
+    default_aux_model="glm-5",
+    supports_vision_tool_messages=False,
+)
+
 register_provider(opencode_zen)
 register_provider(opencode_go)
+register_provider(opencode_go_2)
