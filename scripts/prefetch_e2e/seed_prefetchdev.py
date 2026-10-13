@@ -13,7 +13,10 @@ import time
 from pathlib import Path
 
 os.environ.setdefault("HERMES_HOME", "/home/agentuser/.hermes/profiles/prefetchdev")
-sys.path.insert(0, "/home/agentuser/Projects/hermes-prefetch-compress")
+# Resolve against the pipeline checkout this script ships in (the dev repo
+# at ~/Projects/hermes-prefetch-compress is an older clone and its plain
+# `import yaml` predates the upstream hermes_yaml vendoring).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from hermes_state import SessionDB
 
