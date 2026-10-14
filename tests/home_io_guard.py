@@ -86,13 +86,11 @@ class HomeIOGuard:
             # probe) reads no state; only its contents are guarded.
             if metadata and absolute in roots:
                 return
-            # ``pm.environments._payload_manifest`` asks whether a sealed payload
-            # manifest sits beside the install tree — ``<root>/manifest.json``,
-            # existence probe (``is_file``) only. Read-only, and typically absent
-            # for a plain checkout: the same "reads no state" class as the root
-            # probe above. Opening the manifest itself stays guarded, and a
-            # same-named file deeper in the tree stays refused.
-            if (metadata and os.path.basename(absolute) == "manifest.json"
+            # ``pm.environments._payload_manifest`` reads a sealed payload manifest
+            # beside the install tree — ``<root>/manifest.json``, read-only, and the
+            # read itself is the probe (absent → OSError → "not a payload"). Exempt
+            # reads of exactly that one file: mutations and deeper paths stay refused.
+            if (not destructive and os.path.basename(absolute) == "manifest.json"
                     and os.path.dirname(absolute) in roots):
                 return
             # ``shutil.which`` stats/accesses ``<PATH entry>/<name>``. A developer shell puts
