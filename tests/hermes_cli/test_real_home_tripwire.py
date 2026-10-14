@@ -200,6 +200,27 @@ def test_checkout_inside_a_guarded_root_is_not_hermes_state():
         guard.check(PROJECT_ROOT.parent / "config.yaml")
 
 
+def test_payload_manifest_existence_probe_is_exempt(protected_home):
+    """``pm.environments._payload_manifest`` asks whether a sealed payload
+    manifest sits beside the install tree — ``<root>/manifest.json`` with an
+    existence probe only. That metadata read reads no state (the file is absent
+    for a plain checkout) and is exempt; opening the manifest stays refused, and
+    a same-named file deeper in the tree stays guarded."""
+    from tests.home_io_guard import HomeIOGuard
+
+    manifest = protected_home / "manifest.json"
+    # The live suite guard exempts the existence probe...
+    assert manifest.is_file() is False
+    # ...while opening the file itself stays refused.
+    with pytest.raises(AssertionError, match="REAL hermes home"):
+        manifest.read_text(encoding="utf-8")
+    # Direct guard: the root-level probe passes, a nested manifest does not.
+    guard = HomeIOGuard(lambda: [protected_home])
+    guard.check(manifest, metadata=True)
+    with pytest.raises(AssertionError, match="REAL hermes home"):
+        guard.check(protected_home / "nested" / "manifest.json", metadata=True)
+
+
 def test_hermes_exported_scratch_tmp_is_not_the_test_temp_root(tmp_path):
     """A Hermes-launched shell hands pytest TMPDIR=<home>/cache/scratch (tagged by
     HERMES_SCRATCH_DIR). With that home guarded, honoring it would put the session
