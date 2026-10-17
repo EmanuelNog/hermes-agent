@@ -65,6 +65,35 @@ def _canonical_home(home: str | Path) -> str:
     return os.path.normcase(str(Path(home).expanduser().resolve()))
 
 
+def gateway_profile_home(home: str | Path) -> Path:
+    """The profile home whose gateway serves *home*: the home itself, or for a private overlay home
+    (a task dir mirroring a profile through symlinks, its ``gateway.lock`` among them) the profile its
+    lock names. A client compares the owner's ``profile_id`` with this, never the overlay path.
+    Not normcased: ``profile_id`` keeps the owner's own spelling (Windows)."""
+    return _overlay_owner_home(Path(home).expanduser().resolve())
+
+
+def _overlay_owner_home(home: Path) -> Path:
+    """Return the owner named by a private overlay's gateway lock, if it has one."""
+    if os.name == "nt":
+        return home
+    from hermes_cli.gateway_runtime_discovery import DiscoveryError, _private_lock, _private_node
+    lock = home / "gateway.lock"
+    try:
+        # An overlay home intentionally shares only the owner's lock.  Do not turn an arbitrary
+        # link into a profile alias: both homes and the target lock must meet ordinary discovery's
+        # private-control checks.
+        _private_node(home, kind="directory", home=True)
+        target = lock.resolve(strict=True)
+        if not lock.is_symlink() or target.name != "gateway.lock":
+            return home
+        _private_node(target.parent, kind="directory", home=True)
+        _private_lock(target)
+    except (FileNotFoundError, OSError, DiscoveryError):
+        return home
+    return target.parent
+
+
 def _endpoint(payload: dict, home: Path, control_home: Path | None = None) -> GatewayDiscovery:
     if type(payload.get("runtime_protocol")) is not int or payload["runtime_protocol"] != 1:
         return GatewayDiscovery("incompatible", reason_code="runtime_protocol")
@@ -198,7 +227,7 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
 
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout must be finite and positive")
-    home = Path(_canonical_home(profile_home))
+    home = _overlay_owner_home(Path(_canonical_home(profile_home)))
     try:
         return _endpoint(query_identify(home, timeout=timeout), home)
     except (FileNotFoundError, ConnectionRefusedError):
@@ -252,6 +281,17 @@ def _update_fenced(homes) -> bool:
     return False
 
 
+def _fenced_verdict(home: Path, timeout: float) -> GatewayDiscovery:
+    """What ensure answers while an update owns the install. The update's own drain
+    (``pause-for-update``) is a restart's after-turn wait whose owner may hold a turn parked on
+    approval/clarify, so it is handed out for clients to answer it (#139041). Discovery only:
+    nothing is started or replaced while fenced, and any other owner state stays ``update_paused``."""
+    observed = discover_gateway_endpoint(home, timeout=timeout)
+    if observed.state == "draining" and attachable(observed):
+        return observed
+    return GatewayDiscovery("draining", reason_code="update_paused")
+
+
 _REPLACE_FAILED_DETAIL = "an older Hermes gateway still owns this profile after a stop; run: hermes gateway stop"
 # ``draining`` reasons after which the owner is going away by itself: its own idle exit, or the
 # older-Hermes owner this call just stopped. Ensure waits it out and starts the current owner.
@@ -302,7 +342,7 @@ def ensure_gateway_runtime(profile_home: str | Path, *, timeout: float = DEFAULT
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout must be finite and positive")
     deadline = time.monotonic() + timeout
-    home = Path(_canonical_home(profile_home))
+    home = _overlay_owner_home(Path(_canonical_home(profile_home)))
     requested = False
     child = None
     child_home, child_offset = home, 0
@@ -316,7 +356,7 @@ def ensure_gateway_runtime(profile_home: str | Path, *, timeout: float = DEFAULT
         while True:
             # The install-root marker also covers profiles.
             if _update_fenced({home, get_process_hermes_home(), get_default_hermes_root()}):
-                return GatewayDiscovery("draining", reason_code="update_paused")
+                return _fenced_verdict(home, remaining(deadline))
             # Poll BEFORE discovering: an exit observed first, then "absent", cannot be a child that
             # published its owner a moment later. A winning racer shows up as starting/ready instead.
             status = child.poll() if child is not None else None
