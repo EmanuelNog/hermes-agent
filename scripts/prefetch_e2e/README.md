@@ -56,11 +56,18 @@ Config: `compression.threshold_tokens 0.75`-equivalent on 1M,
 ## Benchmarks
 
 ```bash
-venv/bin/python scripts/prefetch_e2e/bench_compression.py    # blocking-path timings from agent.log sessions
+venv/bin/python scripts/prefetch_e2e/bench_compression.py                  # blocking-path timings parsed from agent.log*
+venv/bin/python scripts/prefetch_e2e/bench_compression.py --session <id>   # one session only
+venv/bin/python scripts/prefetch_e2e/bench_compression.py --json           # machine-readable
 ```
 
-`bench_compression.py` reads `agent.log` compression durations; baseline
-(2026-09, post-#96603): 253s / 116s / 159s per pass at ~519K prefill.
+`bench_compression.py` is **read-only**: it parses the compression lines Hermes
+already writes (`context compression started` / `done` / `attempt telemetry`)
+out of `$HERMES_HOME/logs/agent.log*` (override with `--log PATH`) and prints
+one row per attempt plus min/median/max of `total_duration_ms`. It does not
+drive sessions or touch config — to re-baseline, run a compressing session
+first, then read the log.
+Baseline (2026-09, post-#96603): 253s / 116s / 159s per pass at ~519K prefill.
 
 ## Notes
 
