@@ -237,6 +237,19 @@ def test_payload_manifest_probe_is_read_only_exempt(protected_home):
         guard.check(manifest, destructive=True)
     with pytest.raises(AssertionError, match="REAL hermes home"):
         guard.check(protected_home / "nested" / "manifest.json")
+@pytest.mark.parametrize("kind", ["environments", "test-environment"])
+def test_pm_generation_dir_around_the_running_venv_is_the_interpreter(tmp_path, kind):
+    """scripts/run_tests.sh runs ``<home>/installs/<key>/<kind>/<gen>/venv`` with HOME pointed at the
+    run's fake home, so that venv sits under the guarded root. `hermes update` probes
+    ``<venv>/../hermes_cli/main.py`` (update_owning_install) and must not trip the guard."""
+    from tests.home_io_guard import _pm_generation_dirs
+
+    generation = tmp_path / ".hermes" / "installs" / "0123456789abcdef" / kind / "gen-1"
+    venv = generation / "venv"
+    venv.mkdir(parents=True)
+    assert _pm_generation_dirs([venv]) == {generation.resolve()}
+    # Only a generation venv: a checkout's .venv or a venv elsewhere adds nothing new.
+    assert _pm_generation_dirs([tmp_path / "checkout" / ".venv", tmp_path / "other" / "venv"]) == set()
 
 
 def test_hermes_exported_scratch_tmp_is_not_the_test_temp_root(tmp_path):
