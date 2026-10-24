@@ -584,6 +584,66 @@ def test_pythonpath_descendants_are_not_owned():
     assert env["PYTHONPATH"].split(os.pathsep) == entries
 
 
+def _generation_site_packages(generations: Path, generation: str, version: str | None = None) -> Path:
+    """Create ``<generations>/<generation>/venv/**/site-packages`` and return that path."""
+    venv = generations / generation / "venv"
+    if os.name == "nt":
+        site = venv / "Lib/site-packages"
+    else:
+        version = version or f"{sys.version_info.major}.{sys.version_info.minor}"
+        site = venv / f"lib/python{version}/site-packages"
+    site.mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("version = 3.14\n", encoding="utf-8")
+    return site
+
+
+@pytest.mark.parametrize("other_version", [None, "3.11"])
+def test_stale_generation_site_packages_are_hermes_owned(child_env, monkeypatch, other_version):
+    """A PYTHONPATH entry from a PREVIOUS pm generation is Hermes-owned, not user data.
+
+    A session that once ran on another dependency generation keeps that generation's
+    site-packages in its exported PYTHONPATH. It is NOT the selected venv, so the
+    exact-match check never saw it, and it survived into every child shell — where, on a
+    project venv of a different Python version, it shadowed the project's own packages and
+    surfaced as ``ModuleNotFoundError: pydantic_core._pydantic_core`` (chk-j3si.127).
+    """
+    make_install = child_env / ".hermes"
+    generations = make_install / "installs" / "installkey" / "environments"
+    stale = _generation_site_packages(generations, "b844b4e2d2684104bea50f74a3f12457", other_version)
+    monkeypatch.setattr("pm.environments.install_state_dir", lambda repo: generations.parent)
+    user = child_env / "user-lib"
+    user.mkdir()
+    env = {"PYTHONPATH": os.pathsep.join([str(stale), str(user)])}
+
+    pp._strip_hermes_owned_pythonpath(env)
+
+    assert env["PYTHONPATH"].split(os.pathsep) == [str(user)]
+
+
+def test_generation_lookalike_outside_the_store_is_preserved(child_env, monkeypatch):
+    """Only paths inside THIS install's dependency store are Hermes-owned.
+
+    A user venv that merely spells the same layout elsewhere (or a store owned by a
+    different install root) is user data and survives byte-for-byte.
+    """
+    generations = child_env / ".hermes" / "installs" / "installkey" / "environments"
+    monkeypatch.setattr("pm.environments.install_state_dir", lambda repo: generations.parent)
+    lookalike = _generation_site_packages(child_env / "user-venvs" / "environments", "gen")
+    # Not a ``<gen>/venv`` layout: a venv directly under the store is not a generation.
+    bare = generations / "gen" / "lib" / (
+        "Lib/site-packages" if os.name == "nt"
+        else f"python{sys.version_info.major}.{sys.version_info.minor}/site-packages")
+    bare.mkdir(parents=True)
+    # Inside the store but not a site-packages entry: a sibling tool dir is user data.
+    tooling = generations / "gen" / "venv" / "custom-tools"
+    tooling.mkdir(parents=True)
+    env = {"PYTHONPATH": os.pathsep.join([str(lookalike), str(bare), str(tooling)])}
+
+    pp._strip_hermes_owned_pythonpath(env)
+
+    assert env["PYTHONPATH"].split(os.pathsep) == [str(lookalike), str(bare), str(tooling)]
+
+
 @pytest.mark.platforms("linux", "macos", "windows")
 @pytest.mark.parametrize("link_at", ["home", "repo", "unrelated"])
 @pytest.mark.parametrize("profile", [False, True])
@@ -650,8 +710,10 @@ def test_runtime_provenance_is_independent_of_aliases_and_virtual_env(child_env,
     (user_venv / "pyvenv.cfg").write_text("version = 3.13\n", encoding="utf-8")
     base = {"VIRTUAL_ENV": str(user_venv), "PYTHONPATH": os.pathsep.join(map(str, [site, alias, user_site]))}
     result = local._sanitize_subprocess_env(base)
-    expected = [str(user_site)] if has_facts else [str(site), str(user_site)]
-    assert result["PYTHONPATH"].split(os.pathsep) == expected
+    # The store-shaped entry is Hermes-owned with OR without facts.json: this install's
+    # ``<state>/environments/<gen>/venv`` tree is never a child's import path (chk-j3si.127),
+    # and the user venv that merely spells ``Lib/site-packages`` stays untouched.
+    assert result["PYTHONPATH"].split(os.pathsep) == [str(user_site)]
     assert "VIRTUAL_ENV" not in result
     assert base["VIRTUAL_ENV"] == str(user_venv)
 
