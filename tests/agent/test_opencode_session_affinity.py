@@ -161,3 +161,64 @@ def test_stateless_oneshot_still_sends_an_opencode_session_header(out_of_turn):
 
     assert opencode_session_headers("opencode-go", None, session_id=None).get("x-opencode-session")
     assert opencode_session_headers("openrouter", "https://openrouter.ai/api/v1", session_id=None) == {}
+
+
+def test_broken_matcher_import_does_not_answer_false(monkeypatch):
+    """A missing dependency must not read as "not an OpenCode target".
+
+    The old ``except Exception: pass`` turned ``ModuleNotFoundError: No module named 'ruamel'``
+    (hermes_cli.models transitively needs it) into a plain ``False``, which silently stripped
+    ``x-opencode-session`` from every OpenCode request — the HTTP 400 MissingSessionID class
+    (#105841) that a green-looking code path was hiding. The name/host fallback keeps the header,
+    and the breakage is RECORDED so a probe can error instead of trusting the answer.
+    """
+    import builtins
+
+    import agent.opencode_affinity as oa
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "hermes_cli.models":
+            raise ModuleNotFoundError("No module named 'ruamel'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    monkeypatch.setattr(oa, "_MATCHER_IMPORT_ERRORS", {})
+
+    # Provider-name path (built-in and custom-family names) survives the broken matcher.
+    assert oa.is_opencode_target("opencode-go", "https://opencode.ai/zen/go/v1") is True
+    assert oa.is_opencode_target("opencode-go-bridge", "") is True
+    assert oa.opencode_session_headers(
+        "opencode-go", "https://opencode.ai/zen/go/v1", "sess-x"
+    ) == {"x-opencode-session": "sess-x"}
+
+    # URL-only detection still works, and non-OpenCode targets are still clean.
+    assert oa.is_opencode_target("custom", "https://opencode.ai/zen/go/v1") is True
+    assert oa.is_opencode_target("openrouter", "https://openrouter.ai/api/v1") is False
+    assert oa.opencode_session_headers("openrouter", "https://openrouter.ai/api/v1") == {}
+
+    # The environment breakage is visible, not swallowed.
+    assert "hermes_cli.models.opencode_provider_family" in oa.matcher_breakage()
+
+
+def test_matcher_fallbacks_agree_with_the_real_matchers():
+    """The import-free fallbacks must never disagree with the real matchers they stand in for."""
+    import agent.opencode_affinity as oa
+
+    assert oa.matcher_breakage() == {}  # healthy environment: no failures recorded
+
+    providers = ["opencode-go", "opencode-zen", "opencode-go-bridge", "opencode-zen-2", "custom",
+                 "openrouter", "anthropic", "openai", None, ""]
+    urls = ["https://opencode.ai/zen/go/v1", "https://opencode.ai/zen/v1", "https://api.opencode.ai/v1",
+            "https://openrouter.ai/api/v1", "", None, "https://opencode.ai.evil.example/v1"]
+
+    from hermes_cli.models import opencode_provider_family
+
+    for p in providers:
+        assert oa._provider_name_is_opencode(p) == (opencode_provider_family(p) is not None), p
+
+    from agent.anthropic_endpoints import _is_opencode_endpoint
+
+    for u in urls:
+        assert oa._host_is_opencode(u) == _is_opencode_endpoint(str(u or "")), u

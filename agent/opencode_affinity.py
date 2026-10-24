@@ -24,10 +24,55 @@ Every request — main turn on any transport, auxiliary calls — goes through
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any, Optional
+from urllib.parse import urlsplit
+
+logger = logging.getLogger("run_agent")
 
 OPENCODE_SESSION_HEADER = "x-opencode-session"
+
+# Mirrors ``hermes_cli.models._OPENCODE_FAMILIES``; used only when that module cannot be imported,
+# so the fallback can never claim a provider the real matcher would reject.
+_OPENCODE_FAMILY_SLUGS = ("opencode-zen", "opencode-go")
+
+# Matcher imports that failed, keyed by import target, valued by "<ExcType>: <message>". Empty in a
+# healthy environment; a probe/diagnostic should ERROR on it rather than trust a False answer.
+_MATCHER_IMPORT_ERRORS: dict[str, str] = {}
+
+
+def _note_matcher_breakage(what: str, exc: BaseException) -> None:
+    """Record (once per distinct failure) that an OpenCode predicate could not be imported."""
+    detail = f"{type(exc).__name__}: {exc}"
+    if _MATCHER_IMPORT_ERRORS.get(what) == detail:
+        return
+    _MATCHER_IMPORT_ERRORS[what] = detail
+    logger.warning(
+        "opencode affinity: %s unavailable (%s) — resolving targets from provider name / host",
+        what,
+        detail,
+    )
+
+
+def matcher_breakage() -> dict[str, str]:
+    """Import failures seen by :func:`is_opencode_target` (``{}`` when the matchers loaded)."""
+    return dict(_MATCHER_IMPORT_ERRORS)
+
+
+def _provider_name_is_opencode(provider: Optional[str]) -> bool:
+    """Name-shape match for the built-in family slugs and custom entries extending one (#85589)."""
+    raw = str(provider or "").strip().lower()
+    return bool(raw) and raw.startswith(_OPENCODE_FAMILY_SLUGS)
+
+
+def _host_is_opencode(base_url: Optional[str]) -> bool:
+    """Import-free ``opencode.ai`` host check (fallback for the endpoint matcher)."""
+    try:
+        host = (urlsplit(str(base_url or "")).hostname or "").lower()
+    except Exception:
+        return False
+    return host == "opencode.ai" or host.endswith(".opencode.ai")
 
 
 def opencode_transport(provider: Optional[str], model: Optional[str], base_url: Optional[str]) -> tuple[Optional[str], str]:
@@ -62,20 +107,38 @@ def is_opencode_target(provider: Optional[str], base_url: Optional[str]) -> bool
 
     Matches the built-in opencode-zen/go providers, custom
     ``opencode-<family>-*`` providers, and any base_url hosted on opencode.ai.
+
+    A broken ENVIRONMENT must not read as "not an OpenCode target": when a matcher cannot be
+    imported, the name/host is resolved locally and the breakage is recorded
+    (:func:`matcher_breakage`) instead of being swallowed into a ``False`` — the silent-False
+    path stripped the session header from every OpenCode request, which is OpenCode Go's
+    HTTP 400 MissingSessionID (#105841).
     """
     try:
         from hermes_cli.models import opencode_provider_family
-
-        if opencode_provider_family(provider) is not None:
+    except Exception as exc:  # missing dependency in this interpreter, not a product answer
+        _note_matcher_breakage("hermes_cli.models.opencode_provider_family", exc)
+        if _provider_name_is_opencode(provider):
             return True
-    except Exception:
-        pass
+    else:
+        try:
+            if opencode_provider_family(provider) is not None:
+                return True
+        except Exception as exc:
+            _note_matcher_breakage("hermes_cli.models.opencode_provider_family", exc)
+            if _provider_name_is_opencode(provider):
+                return True
+
     try:
         from agent.anthropic_endpoints import _is_opencode_endpoint
-
-        return _is_opencode_endpoint(str(base_url or ""))
-    except Exception:
-        return False
+    except Exception as exc:
+        _note_matcher_breakage("agent.anthropic_endpoints._is_opencode_endpoint", exc)
+        return _host_is_opencode(base_url)
+    try:
+        return bool(_is_opencode_endpoint(str(base_url or "")))
+    except Exception as exc:
+        _note_matcher_breakage("agent.anthropic_endpoints._is_opencode_endpoint", exc)
+        return _host_is_opencode(base_url)
 
 
 def resolve_affinity_key(session_id: Optional[str] = None) -> str:
