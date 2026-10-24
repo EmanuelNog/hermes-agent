@@ -98,6 +98,12 @@ def is_stt_enabled(stt_config: Optional[dict] = None) -> bool:
     return is_truthy_value(cfg.get("enabled", True), default=True)
 
 
+def _diarize_enabled(local_cfg: Optional[dict]) -> bool:
+    """``stt.local.diarize`` — opt-in local speaker labels via sherpa-onnx."""
+    from tools.transcription_diarize import diarize_enabled
+    return diarize_enabled(local_cfg)
+
+
 def _resolve_stt_language(
     provider_key: str, stt_config: Optional[dict[str, Any]] = None, *, extra_keys: tuple = ()
 ) -> Optional[str]:
@@ -411,11 +417,32 @@ def _transcribe_local(
         transcript = _join_confident_segments(segments, local_cfg)
         logger.info("Transcribed %s via local whisper (%s, lang=%s, %.1fs audio)",
                     Path(file_path).name, model_name, info.language, info.duration)
+        # Optional local speaker diarization (stt.local.diarize): sherpa-onnx labels who spoke
+        # when, the free counterpart of stt.elevenlabs.diarize. Best-effort — a missing model or
+        # dependency must never turn a good transcript into a failed one.
+        diarized: dict[str, Any] = {}
+        if _diarize_enabled(local_cfg):
+            try:
+                from tools.transcription_diarize import DiarizeUnavailable, diarize_transcript
+                result = diarize_transcript(file_path, segments, local_cfg)
+                if result["transcript"]:
+                    transcript = result["transcript"]
+                diarized = {"segments": result["segments"], "speakers": result["speakers"]}
+                logger.info("Diarized %s: %d speaker(s) %s", Path(file_path).name,
+                            len(result["speakers"]), result["speakers"])
+            except Exception as exc:  # diarization is advisory: never fail the transcript
+                from tools.transcription_diarize import DiarizeUnavailable
+                diarized = {"diarize_error": str(exc)}
+                if isinstance(exc, DiarizeUnavailable):
+                    logger.warning("Local diarization skipped for %s: %s", Path(file_path).name, exc)
+                else:
+                    logger.warning("Local diarization failed for %s: %s", Path(file_path).name,
+                                   exc, exc_info=True)
         _touch_transcription_time()
         idle_timeout = _get_idle_unload_seconds(local_cfg)
         if idle_timeout > 0:
             _start_idle_unload_watcher(idle_timeout)
-        return _ok_result(transcript, "local")
+        return {**_ok_result(transcript, "local"), **diarized}
     except Exception as e:
         logger.error("Local transcription failed: %s", e, exc_info=True)
         return _error_result(f"Local transcription failed: {e}")

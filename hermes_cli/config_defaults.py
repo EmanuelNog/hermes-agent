@@ -1181,6 +1181,17 @@ DEFAULT_CONFIG = {
             "no_speech_prob_threshold": 0.6,
             "logprob_threshold": -1.0,
             "unload_after_idle_seconds": 0,  # 0 = never; e.g. 300 frees the model after 5min
+            # Local speaker diarization ("who spoke when") via sherpa-onnx, the free/offline
+            # counterpart of stt.elevenlabs.diarize. Transcript becomes "SPEAKER_00: …" per turn
+            # and the result carries segment/speaker data. Needs sherpa-onnx (`pm install
+            # wake-sherpa`) plus a pyannote segmentation model and a speaker-embedding ONNX file
+            # in diarize_model_dir. Best-effort: if either is missing, transcription still succeeds
+            # and the result carries `diarize_error`.
+            "diarize": False,
+            "diarize_model_dir": "",  # "" = <hermes home>/models/sherpa-speaker
+            "diarize_num_speakers": -1,  # -1 = infer; set 2 for known two-person audio
+            "diarize_threshold": 0.5,  # clustering threshold; higher = fewer speakers
+            "diarize_num_threads": 2,
         },
         "groq": {
             "model": "whisper-large-v3-turbo",  # whisper-large-v3-turbo, whisper-large-v3
