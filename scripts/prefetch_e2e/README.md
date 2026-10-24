@@ -20,18 +20,63 @@ Run after every upstream fetch, once the compat suite is green.
 
 ## Small-scale (minutes): profile `prefetchdev`
 
+**Run it in an ISOLATED home, never by attaching to the shared gateway.**
+
+`./dev-run.sh -p prefetchdev chat ...` is a thin client: it attaches to whichever
+gateway serves the profile. On agentpod that is the default multiplexer at
+`~/.hermes`, which runs the MAIN INSTALL's code — so the turn executes the
+install's modules, not this checkout's, and a dev client racing that owner can
+drag it into a replace/restart cycle that kills live sessions
+(bead chk-j3si.119; verified 2026-10-23: the multiplexer answered for
+prefetchdev with the install HEAD while the checkout was another commit ahead).
+`scripts/prefetch_e2e/e2e_dev_home.sh` gives the E2E a home of its own instead:
+
 ```bash
-venv/bin/python scripts/prefetch_e2e/seed_prefetchdev.py        # seed a ~7.5–9K session (PREFETCH_SEED_ROUNDS default 24)
-# then drive a PERSISTENT process (the worker dies with a one-shot chat -q):
-#   interactive REPL:  ./dev-run.sh -p prefetchdev
-#   or a script(1) PTY harness (see skill hermes-context-compression)
-# expect: "Prefetch compression armed at ~..." then "... adopted: N -> M messages"
+scripts/prefetch_e2e/e2e_dev_home.sh --prepare       # provision home + start ITS gateway (first run installs deps, minutes)
+HERMES_HOME=$(scripts/prefetch_e2e/e2e_dev_home.sh --print-home) \
+  ~/.hermes/hermes-agent/.venv/bin/python scripts/prefetch_e2e/seed_prefetchdev.py
+scripts/prefetch_e2e/e2e_dev_home.sh -- chat -r <seeded-sid>    # then drive 2-3 turns (persistent REPL or -q, see below)
+# expect: "Prefetch compression armed at ~... (threshold ..., margin ..., context ...)"
+#     then: "Prefetch compaction adopted: N -> M messages, K live suffix rows kept"
+scripts/prefetch_e2e/e2e_dev_home.sh --status        # asserts its gateway's code_sha == this checkout's HEAD
+scripts/prefetch_e2e/e2e_dev_home.sh --stop
 ```
 
-Config (2026-09-24: shrunk to cut test spend — window 24K, threshold 16K):
-`compression.threshold_tokens 16000`, `compression.prefetch_margin 0.15`,
-`model.context_length 24000` (arm point 12,400; the seed lands ~7.5K so the
-resume turn's tool growth crosses it mid-turn).
+What the launcher guarantees:
+
+- `HERMES_HOME` is a scratch dir **outside** `~/.hermes` (`~/.cache/hermes-e2e/prefetchdev-home`
+  by default), so no multiplexer claims it and no systemd unit exists for it: the real
+  gateway is never a candidate owner, and a client here cannot restart it.
+- The checkout's own code boots (sys.path[0] = checkout root), so the CLI **and** the
+  unmanaged gateway it spawns stamp this checkout's `code_sha`; `--status` proves it.
+- Credentials are the ROOT install's `auth.json`, not the profile's — a profile copy can
+  lack the nous portal token, which makes the configured fallback unusable.
+- Messaging credentials and the BWS token are stripped from the copied dotenv: a second
+  gateway that binds the same Telegram bot refuses to start.
+- The profile's `config.yaml` (window, `threshold_tokens`, `prefetch_margin`) is copied
+  once; `--rebuild` re-copies. The home's `state.db` is its own, so seeds stay private.
+
+Gotchas:
+
+- **The turn runs in the gateway process, so the background worker survives the client.**
+  A one-shot `chat -q -r <sid>` can therefore arm on turn 1 and a second `chat -q -r <sid>`
+  adopt it — the old "one-shot exits before adoption" rule applied to an in-process CLI,
+  not to this isolated gateway. A REPL (tmux) works too and shows both markers in one run.
+- **A stale `context_length_cache.yaml` outranks `model.context_length`.** With the cache
+  carrying a 1M window for the model actually used, the arm point goes negative and the
+  summarizer is asked for an output it truncates → `Prefetch result discarded (worker_noop)`.
+  The launcher deletes the cache with every config copy; if you change the model by hand,
+  delete it yourself and restart the isolated gateway.
+- Provider headroom is a real dependency: when the primary is rate-limited (an OpenCode
+  Go weekly cap shows up as `429 GoUsageLimitError`), the aux compression call falls back
+  to `auxiliary.compression.fallback_chain` — point it at a provider whose credentials the
+  copied `auth.json` actually carries, or the run dies before any adoption.
+
+Config (profile `prefetchdev`, 2026-10-23 — small window, cheap run):
+`model.context_length 64000`, `compression.threshold_tokens 22000`,
+`compression.prefetch_margin 0.15` (arm point 12,400; the seed lands ~7.5K, so the
+resume turn's own tool growth crosses it mid-turn). The arm line prints all four
+numbers, so assert on the line rather than on config files.
 The band must be wider than the largest single tool-result jump or arming gets
 skipped (estimator jitter ~3K tokens).
 
@@ -71,8 +116,9 @@ Baseline (2026-09, post-#96603): 253s / 116s / 159s per pass at ~519K prefill.
 
 ## Notes
 
-- The worker only survives in a persistent process; `chat -q` one-shots exit
-  before adoption (expected, documented).
+- The worker lives in the process that runs the turn. In the isolated home that process is
+  the E2E's own gateway, which outlives the client — so a one-shot `chat -q` can arm and a
+  later run can adopt. Driving a REPL (tmux) still shows both markers in one run.
 - Always re-baseline `conversation_history` after adoption — the gates do this;
   if you write a new gate, mirror it.
 - Skill `hermes-context-compression` carries the full methodology + pitfalls

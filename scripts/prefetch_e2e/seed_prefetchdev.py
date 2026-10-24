@@ -12,7 +12,10 @@ import sys
 import time
 from pathlib import Path
 
-os.environ.setdefault("HERMES_HOME", "/home/agentuser/.hermes/profiles/prefetchdev")
+# HERMES_HOME selects the target home (default: the prefetchdev profile). The isolated
+# E2E home from e2e_dev_home.sh is passed this way, so a seed never touches the profile
+# the live gateway serves.
+HOME = Path(os.environ.get("HERMES_HOME") or "/home/agentuser/.hermes/profiles/prefetchdev")
 # Resolve against the pipeline checkout this script ships in (the dev repo
 # at ~/Projects/hermes-prefetch-compress is an older clone and its plain
 # `import yaml` predates the upstream hermes_yaml vendoring).
@@ -20,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from hermes_state import SessionDB
 
-DB_PATH = Path("/home/agentuser/.hermes/profiles/prefetchdev/state.db")
+DB_PATH = HOME / "state.db"
 ROUNDS = int(os.environ.get("PREFETCH_SEED_ROUNDS", "24"))  # tune seed size; ~9K at 24
 sid = time.strftime("seed2_%Y%m%d_%H%M%S")
 db = SessionDB(db_path=DB_PATH)
