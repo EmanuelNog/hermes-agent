@@ -50,6 +50,7 @@ def _agent(labels: list) -> SimpleNamespace:
         max_compression_attempts=3, _compression_feasibility_checked=True,
         _emit_status=lambda _msg: None, _safe_print=lambda *_a: None,
         _compress_context=_record_and_stop,
+        iteration_budget=SimpleNamespace(refund=lambda: None),
     )
 
 
@@ -92,6 +93,34 @@ def _drive_pre_api(agent: SimpleNamespace) -> None:
         moa_prepared_request=None, system_message="sys", user_message="current ask",
         max_compression_attempts=3, effective_task_id="task",
     )
+
+
+def test_pre_api_adoption_returns_continue_and_refunds(monkeypatch):
+    """br-txf.1: adopting a finished prefetch worker at the pre-API gate must not
+    fall through to dispatch the request assembled from the pre-splice messages.
+    It must refund the call and return ``continue`` so the loop re-assembles."""
+    messages = _messages()
+    monkeypatch.setattr(
+        "agent.turn_prefetch_compaction.run_prefetch_compaction_step",
+        lambda *a, **k: ("adopted", messages),
+    )
+    agent = _agent([])
+    verdict = PreflightGateVerdict(
+        action="fallthrough", pending_moa_prepared_request=None, messages=messages,
+        active_system_prompt="sys", conversation_history=None, api_call_count=1,
+        compression_attempts=0, final_response=None, failed=False, _turn_exit_reason=None,
+        _compression_timeout_exhausted=False, _preflight_compression_blocked=False,
+        _provider_overflow_recovery_pending=False, _last_preflight_pressure=0,
+    )
+    out = run_preflight_compression(
+        agent, verdict, compressor=agent.context_compressor, request_pressure_tokens=5_000,
+        provider_overflow_preflight=False, defer_preflight=lambda _tokens: False,
+        moa_prepared_request=None, system_message="sys", user_message="current ask",
+        max_compression_attempts=3, effective_task_id="task",
+    )
+    assert out.action == "continue"
+    assert out.api_call_count == 0
+    assert agent._api_call_count == 0
 
 
 def _drive_post_tool(agent: SimpleNamespace) -> None:

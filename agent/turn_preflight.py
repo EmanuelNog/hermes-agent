@@ -105,6 +105,11 @@ def run_preflight_compression(
             agent, v.messages, v.conversation_history
         )
         _reset_retry_state_after_compaction(agent)
+        # The request was assembled from the PRE-splice messages: refund the
+        # call/budget and re-enter the loop so the spliced list is re-assembled
+        # and re-measured before dispatch. Mirrors the blocking branch below.
+        v.api_call_count = _refund_api_call(agent, v.api_call_count)
+        return _done("continue")
 
     if _eligible:
         # Aux clamp must land before the first compaction fires on the main-window threshold (#114707).
