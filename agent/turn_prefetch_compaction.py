@@ -100,6 +100,11 @@ def can_prefetch(agent: Any, messages: List[dict], tokens: int) -> Tuple[bool, O
     compressor = getattr(agent, "context_compressor", None)
     if compressor is None:
         return False, "no_compressor"
+    # After a compaction (local or native) the last real reading is stale and the
+    # gate's pressure figure falls back to last_prompt_tokens. Wait one real reading
+    # before arming another worker, or the ballot re-arms inside the prefetch band.
+    if bool(getattr(compressor, "awaiting_real_usage_after_compression", False)):
+        return False, "awaiting_real_usage"
     trigger = prefetch_trigger_tokens(compressor, margin)
     if trigger is None:
         return False, "no_trigger"

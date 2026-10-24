@@ -133,6 +133,16 @@ def test_ballot_no_arm_with_unpersisted_rows():
     assert not ok
 
 
+def test_ballot_no_arm_while_awaiting_real_usage_after_compression():
+    # br-txf.2: right after a compaction/adoption the gate's figure falls back to
+    # last_prompt_tokens (pre-compaction), which sits inside the prefetch band by
+    # construction. The ballot must wait one real reading before arming again.
+    a = _agent()
+    a.context_compressor.awaiting_real_usage_after_compression = True
+    ok, reason = tac.can_prefetch(a, _arm_msgs(), tokens=4_600)
+    assert not ok and reason == "awaiting_real_usage"
+
+
 def test_ballot_no_arm_when_disabled():
     ok, _ = tac.can_prefetch(_agent(compression_enabled=False), _arm_msgs(), tokens=4_600)
     assert not ok
