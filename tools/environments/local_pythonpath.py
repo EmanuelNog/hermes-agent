@@ -137,10 +137,70 @@ def _strip_hermes_owned_pythonpath_and_runtime_markers(env: dict) -> None:
         env.pop(_marker, None)
 
 
+def _generation_site_packages_roots(env: dict) -> list[Path]:
+    """Dependency-store roots whose ``<generation>/venv`` site-packages are Hermes-owned.
+
+    One install can hold several PM generations, and a session that once ran on another
+    one keeps that generation's site-packages in its exported PYTHONPATH. Only the
+    SELECTED venv is in ``_get_hermes_site_packages``, so a stale generation's entry
+    survived the exact-match check and leaked into every child shell (#chk-j3si.127).
+    """
+    roots: list[Path] = []
+
+    def _add(candidate: Path) -> None:
+        if not any(_same_path(candidate, existing) for existing in roots):
+            roots.append(candidate)
+
+    try:
+        from pm.environments import install_state_dir
+    except Exception:  # a tree without PM still strips the selected venv
+        install_state_dir = None
+    if install_state_dir is not None:
+        for alias in _state()._hermes_repo_root_aliases:
+            try:
+                _add(Path(install_state_dir(alias)) / "environments")
+            except Exception:
+                continue
+    # A borrowed root (hermes-home override, payload) proves its own store from the
+    # validated runtime venv, whose parent chain is ``<environments>/<gen>/venv``.
+    runtime_venv = _validated_runtime_venv(env)
+    if runtime_venv is not None and runtime_venv.parent.parent.name == "environments":
+        _add(runtime_venv.parent.parent)
+    return roots
+
+
+def _is_generation_site_packages(entry: str, roots: list[Path]) -> bool:
+    """Is *entry* ``<store>/environments/<generation>/venv/**/site-packages``?
+
+    Shape-checked and store-scoped on purpose: a user venv that merely spells the same
+    layout elsewhere, or any other descendant of the store, stays user data.
+    """
+    path = Path(entry)
+    if path.name != "site-packages":
+        return False
+    if path.parent.name == "Lib":
+        venv = path.parent.parent
+    elif path.parent.parent.name == "lib":
+        version = path.parent.name
+        if not (version.startswith("python") and version.count(".") == 1
+                and all(part.isdigit() for part in version[len("python"):].split("."))):
+            return False
+        venv = path.parent.parent.parent
+    else:
+        return False
+    if venv.name != "venv":
+        return False
+    # *roots* are the stores themselves (``<install-state>/environments``).
+    return any(_same_path(venv.parent.parent, root) for root in roots)
+
+
 def _strip_hermes_owned_pythonpath(env: dict) -> None:
     """Remove Hermes-owned PYTHONPATH entries: only exact matches of the repo root
     (any launcher spelling) and runtime site-packages — never descendants, which are
     user paths. Empty components (= cwd) and everything else are preserved.
+    A stale PM generation's ``.../environments/<gen>/venv/**/site-packages`` is
+    Hermes-owned too: it is this install's own dependency store, and on a child of a
+    different Python version it shadows the project venv's compiled deps.
 
     Everything else -- user libs, Nix plugin paths, a pythonX.Y/site-packages entry meant for a DIFFERENT
     child version -- is preserved byte-for-byte: ownership is decided by path provenance, never by a
@@ -151,7 +211,11 @@ def _strip_hermes_owned_pythonpath(env: dict) -> None:
         return
     owned_paths = [*_get_hermes_site_packages(env), *_state()._hermes_repo_root_aliases]
     entries = pp.split(os.pathsep)
-    stripped = [e for e in entries if e and any(_same_path(Path(e), p) for p in owned_paths)]
+    # The dependency-store lookup (and its pm import) runs only when an entry could be one.
+    generation_roots = (_generation_site_packages_roots(env)
+                        if any(e.endswith("site-packages") for e in entries) else [])
+    stripped = [e for e in entries if e and (any(_same_path(Path(e), p) for p in owned_paths)
+                                             or _is_generation_site_packages(e, generation_roots))]
     kept = [e for e in entries if e not in stripped]
     if kept:
         env["PYTHONPATH"] = os.pathsep.join(kept)
