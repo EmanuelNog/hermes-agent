@@ -158,6 +158,24 @@ opencode_go_2 = OpenCodeGoProfile(
     supports_vision_tool_messages=False,
 )
 
+# Third Go subscription/workspace (2026-10-25) — same shape as opencode-go-2 and kept a
+# distinct registered provider for the same reason: a distinct credential surface is a
+# distinct backend for the fallback walk. Key env: OPENCODE_GO_API_KEY_3.
+#
+# MEASURED 2026-10-25 on this account: deepseek-v4-flash and muse-spark-1.3-contributor
+# are refused with HTTP 400 by the workspace's Privacy settings ("requires Global
+# regions" / "trains on request data"), while glm-5.3, kimi-k2.6 and mimo-v2.5 answer.
+# So a caller that points this provider at a deepseek model gets a 400, not a fallback:
+# the declared chain entry for it therefore names a model this workspace serves.
+opencode_go_3 = OpenCodeGoProfile(
+    name="opencode-go-3", aliases=("opencode_go_3", "go3"),
+    env_vars=("OPENCODE_GO_API_KEY_3",),
+    base_url="https://opencode.ai/zen/go/v1", default_headers=dict(_ATTRIBUTION_HEADERS),
+    default_aux_model="glm-5",
+    supports_vision_tool_messages=False,
+)
+
 register_provider(opencode_zen)
 register_provider(opencode_go)
 register_provider(opencode_go_2)
+register_provider(opencode_go_3)
