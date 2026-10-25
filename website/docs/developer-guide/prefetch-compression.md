@@ -147,6 +147,17 @@ while the loop keeps working.
   still cross the threshold → the normal blocking pass fires — verified live).
 - Rotation mode (`compression.in_place: false`) is refused: the worker rotates
   session ids at commit, which cannot be spliced safely mid-turn.
+- **Adoption at the pre-API gate must re-assemble before dispatch** (br-txf.1):
+  the adopted branch splices the compacted messages into the request but must
+  NOT fall through to dispatch the request assembled from the PRE-splice
+  transcript. It refunds the call/budget and returns `continue` so the loop
+  re-assembles and re-measures — mirroring the blocking branch.
+- **The ballot waits for a real reading after a compaction** (br-txf.2): right
+  after a compaction/adoption the gate's pressure figure falls back to
+  `last_prompt_tokens` (pre-compaction), which lands inside the prefetch band by
+  construction and re-arms a spurious second worker. `can_prefetch` refuses while
+  `context_compressor.awaiting_real_usage_after_compression` is set, honoring the
+  same deferral the blocking branches use.
 
 
 ## Evidence
