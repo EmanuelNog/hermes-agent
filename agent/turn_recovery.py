@@ -1460,8 +1460,20 @@ def compute_error_backoff(
     # ``retry_after`` problem-detail body field; ignoring either turns an origin
     # outage into a retry storm.
     _retry_after = provider_retry_after_seconds(api_error)
+    _unattended_cap = False
     if _retry_after is not None:
         _retry_after = min(_retry_after, RETRY_AFTER_CAP_S)
+        # An UNATTENDED run has nobody to sit out a long provider window: while it sleeps it emits
+        # nothing, so its caller reads the silence as a hang rather than a quota verdict - pc2's
+        # one-shots sat 600 s per attempt on a dead pool (chk-n5va.15). Cap a quota cooldown for
+        # those runs at LIVE_RETRY_WAIT_CAP_S: the call then fails fast (or the fallback chain takes
+        # the turn) and the reason is logged. Attended sessions keep the full Retry-After, because a
+        # paid bucket reopens on time and fallback.min_switch_reset_seconds relies on that wait.
+        if _retry_after > LIVE_RETRY_WAIT_CAP_S:
+            from agent.session_source import is_attended
+            if not is_attended(agent):
+                _retry_after = LIVE_RETRY_WAIT_CAP_S
+                _unattended_cap = True
     wait_time = _retry_after if _retry_after is not None else jittered_backoff(retry_count, base_delay=2.0, max_delay=60.0)
     _backoff_policy = None
     _adaptive = is_rate_limited or is_zai_coding_overload
@@ -1500,7 +1512,7 @@ def compute_error_backoff(
     logger.warning(
         "Retrying API call in %ss (attempt %s/%s) %s policy=%s error=%s",
         wait_time, retry_count, max_retries, agent._client_log_context(),
-        _backoff_policy or "default", api_error,
+        _backoff_policy or ("unattended_quota_cap" if _unattended_cap else "default"), api_error,
     )
     return wait_time
 
