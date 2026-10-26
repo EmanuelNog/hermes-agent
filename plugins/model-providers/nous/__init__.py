@@ -8,11 +8,6 @@ from providers import register_provider
 from providers.base import ProviderProfile
 
 
-def _flat_model_name(model: str | None) -> str:
-    """Bare model ID, tolerating aggregator prefixes (``provider/model``)."""
-    return (model or "").strip().rsplit("/", 1)[-1].lower()
-
-
 class NousProfile(ProviderProfile):
     """Nous Portal — product tags, reasoning with Nous-specific omission."""
 
@@ -71,14 +66,6 @@ class NousProfile(ProviderProfile):
         if rc.get("enabled") is False and self._cannot_disable_reasoning(model):
             return {}, {}
         return {"reasoning": rc}, {}
-    def get_max_tokens(self, model: str | None) -> int | None:
-        """Cap the flash family's output - the Portal default truncates long
-        agent reports; prefix match covers versioned pins (-0731) too, and
-        ``_flat_model_name`` strips aggregator prefixes (``deepseek/deepseek-v4-flash-0731``)."""
-        if _flat_model_name(model).startswith("deepseek-v4-flash"):
-            return 16384
-        return self.default_max_tokens
-
 
 
 nous = NousProfile(
