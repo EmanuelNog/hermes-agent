@@ -62,6 +62,12 @@ Gotchas:
   A one-shot `chat -q -r <sid>` can therefore arm on turn 1 and a second `chat -q -r <sid>`
   adopt it — the old "one-shot exits before adoption" rule applied to an in-process CLI,
   not to this isolated gateway. A REPL (tmux) works too and shows both markers in one run.
+  Adoption survives the gateway rebuilding the agent between turns (it evicts the cached
+  instance for one-shot clients): the armed state is kept per session, so the next turn
+  adopts either by splicing into the still-matching list, or — once the worker's commit is
+  the durable transcript — as
+  `Prefetch compaction adopted: N -> M messages, durable commit already live in the session
+  transcript`. Both lines start with `Prefetch compaction adopted:`; match on the prefix.
 - **A stale `context_length_cache.yaml` outranks `model.context_length`.** With the cache
   carrying a 1M window for the model actually used, the arm point goes negative and the
   summarizer is asked for an output it truncates → `Prefetch result discarded (worker_noop)`.
