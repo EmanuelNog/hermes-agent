@@ -22,15 +22,26 @@ hygiene, Codex native and Responses-native paths are untouched.
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import threading
 import time
+from collections import OrderedDict
 from types import SimpleNamespace
 from typing import Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 _DB_PERSISTED_MARKER_CACHE: Optional[str] = None
+
+# A session's armed worker outlives the AIAgent instance that launched it: the
+# messaging gateway evicts or rebuilds an agent between turns, and the next gate
+# then runs on a FRESH object whose transcript came from the SessionDB. Keyed by
+# session_id and bounded, so an evicted instance's result can still be adopted
+# instead of every gate arming another orphaned worker.
+_PENDING_BY_SESSION: "OrderedDict[str, Any]" = OrderedDict()
+_PENDING_REGISTRY_MAX = 32
+_PENDING_LOCK = threading.Lock()
 
 
 def _persisted_marker() -> str:
@@ -72,6 +83,53 @@ def region_fully_persisted(messages: List[dict]) -> bool:
     return True
 
 
+def _remember_pending(state: Any) -> None:
+    """Publish the armed state for the session, across agent instances."""
+    session_id = getattr(state, "session_id", None)
+    if not session_id:
+        return
+    key = str(session_id)
+    with _PENDING_LOCK:
+        _PENDING_BY_SESSION[key] = state
+        _PENDING_BY_SESSION.move_to_end(key)
+        while len(_PENDING_BY_SESSION) > _PENDING_REGISTRY_MAX:
+            _PENDING_BY_SESSION.popitem(last=False)
+
+
+def _forget_pending(state: Any) -> None:
+    """Drop the session's entry, but only while it still points at *state*."""
+    session_id = getattr(state, "session_id", None)
+    if not session_id:
+        return
+    key = str(session_id)
+    with _PENDING_LOCK:
+        if _PENDING_BY_SESSION.get(key) is state:
+            _PENDING_BY_SESSION.pop(key, None)
+
+
+def _peek_pending(agent: Any) -> Optional[Any]:
+    """The session's pending worker: this agent's own state, else the registry's."""
+    state = getattr(agent, "prefetch_compaction_pending", None)
+    if state is not None:
+        return state
+    session_id = getattr(agent, "session_id", None)
+    if not session_id:
+        return None
+    with _PENDING_LOCK:
+        return _PENDING_BY_SESSION.get(str(session_id))
+
+
+def _attach_pending(agent: Any) -> Optional[Any]:
+    """Bind a state inherited from another instance onto *agent* for this gate."""
+    state = getattr(agent, "prefetch_compaction_pending", None)
+    if state is not None:
+        return state
+    state = _peek_pending(agent)
+    if state is not None:
+        agent.prefetch_compaction_pending = state
+    return state
+
+
 def can_prefetch(agent: Any, messages: List[dict], tokens: int) -> Tuple[bool, Optional[str]]:
     """Ballot for arming the async worker at the current token level."""
     if not getattr(agent, "compression_enabled", False):
@@ -95,7 +153,7 @@ def can_prefetch(agent: Any, messages: List[dict], tokens: int) -> Tuple[bool, O
     margin = float(getattr(agent, "compression_prefetch_margin", 0.0) or 0.0)
     if margin <= 0:
         return False, "margin_zero"
-    if getattr(agent, "prefetch_compaction_pending", None) is not None:
+    if _peek_pending(agent) is not None:
         return False, "already_pending"
     compressor = getattr(agent, "context_compressor", None)
     if compressor is None:
@@ -184,6 +242,38 @@ def _report_prefetch_failure(agent: Any, state: Any, exc: BaseException) -> None
     )
 
 
+def _summary_fingerprint(messages: List[dict]) -> Optional[str]:
+    """The compaction handoff text this list carries, normalized for comparison.
+
+    The SessionDB drops message metadata, so the content prefix is the only part
+    of a summary row that survives a reload — which is exactly what makes it a
+    safe identity check for "this transcript holds OUR compaction".
+    """
+    from agent.context_compressor import is_compaction_summary_message
+
+    for message in messages:
+        if not isinstance(message, dict) or not is_compaction_summary_message(message):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        try:
+            return json.dumps(content, sort_keys=True, default=str)
+        except (TypeError, ValueError):  # pragma: no cover - exotic content only
+            return None
+    return None
+
+
+def _transcript_holds_our_commit(live_messages: List[dict], result_messages: List[dict]) -> bool:
+    """True when the live transcript is already the compaction this worker committed.
+
+    A fresh agent's list comes from the SessionDB, so it never matches the frozen
+    snapshot — but after the worker's durable commit it holds that same summary.
+    """
+    ours = _summary_fingerprint(result_messages)
+    return ours is not None and _summary_fingerprint(live_messages) == ours
+
+
 def adopt_prefetch_result(
     live_messages: List[dict], state: Any, result: Any,
 ) -> Tuple[List[dict], bool, Optional[str]]:
@@ -194,6 +284,12 @@ def adopt_prefetch_result(
     after arming stays verbatim. Any divergence of the live prefix from the
     snapshot discards the result — the seam must be byte-identical or the
     summary is stale.
+
+    One divergence is not staleness: when a DIFFERENT agent instance holds the
+    live list (the gateway rebuilt the session between turns), the list was
+    reloaded from the SessionDB and already contains this worker's durable
+    commit. That transcript carries our summary and nothing needs splicing — the
+    compaction is live, so the result is adopted as-is (``reason='durable'``).
     """
     if not (isinstance(result, tuple) and result and isinstance(result[0], list)):
         return live_messages, False, "bad_result"
@@ -203,6 +299,8 @@ def adopt_prefetch_result(
     snap = state.snapshot
     n = len(snap)
     if n == 0 or n > len(live_messages) or live_messages[:n] != snap:
+        if _transcript_holds_our_commit(live_messages, result_messages):
+            return live_messages, True, "durable"
         return live_messages, False, "prefix_diverged"
     if len(result_messages) == n and result_messages == snap:
         return live_messages, False, "worker_noop"
@@ -234,7 +332,7 @@ def launch_prefetch_compression(
     snapshot and runs ``compress_context`` with its own commit fence (durable
     SessionDB mutation happens on the worker; the main thread never touches it).
     """
-    if getattr(agent, "prefetch_compaction_pending", None) is not None:
+    if _peek_pending(agent) is not None:
         return None
     from agent.conversation_compression import (
         CompressionCommitFence,
@@ -287,6 +385,7 @@ def launch_prefetch_compression(
         session_id=getattr(agent, "session_id", None),
     )
     agent.prefetch_compaction_pending = state
+    _remember_pending(state)
     # Stamp true worker completion for the reported duration; fires on the
     # worker thread when compress_context returns (or raises).
     future.add_done_callback(lambda _f: setattr(state, "finished_at", time.monotonic()))
@@ -310,6 +409,27 @@ def launch_prefetch_compression(
     return state
 
 
+def _log_adoption(
+    agent: Any, state: Any, live_messages: List[dict], new_messages: List[dict],
+    reason: Optional[str],
+) -> None:
+    """One adopted-log shape for every seam (the E2E asserts on this line)."""
+    if reason == "durable":
+        logger.info(
+            "Prefetch compaction adopted: %d -> %d messages, durable commit already live "
+            "in the session transcript (session %s)",
+            len(state.snapshot), len(new_messages),
+            getattr(agent, "session_id", None) or "none",
+        )
+        return
+    logger.info(
+        "Prefetch compaction adopted: %d -> %d messages, %d live suffix rows kept "
+        "(session %s)",
+        len(state.snapshot), len(new_messages), len(live_messages) - len(state.snapshot),
+        getattr(agent, "session_id", None) or "none",
+    )
+
+
 def _clear_pending_state(agent: Any) -> None:
     """Drop the pending state and unregister OUR published fence.
 
@@ -319,6 +439,7 @@ def _clear_pending_state(agent: Any) -> None:
     state = getattr(agent, "prefetch_compaction_pending", None)
     agent.prefetch_compaction_pending = None
     if state is not None:
+        _forget_pending(state)
         fence = getattr(state, "fence", None)
         if fence is not None:
             with vars(agent).setdefault("_compression_commit_fence_lock", threading.RLock()):
@@ -333,15 +454,16 @@ def run_prefetch_compaction_step(
     """One prefetch step at a gate. Returns ``(action, messages)``.
 
     actions:
-      'adopted' — a pending worker finished and its result was spliced; the
-                  caller MUST re-baseline conversation history (and skip the
-                  blocking compression branch this pass).
+      'adopted' — a pending worker finished and its result is live: spliced onto
+                  the snapshot prefix, or already the durable transcript when the
+                  gate runs on a rebuilt agent. The caller MUST re-baseline
+                  conversation history (and skip the blocking branch this pass).
       'armed'   — an async worker was launched; continue WITHOUT blocking.
       'pending' — a worker is still running; continue (caller must NOT launch
                   or block on a competing compression this pass).
       'none'    — nothing to do; the normal (blocking) path applies.
     """
-    state = getattr(agent, "prefetch_compaction_pending", None)
+    state = _attach_pending(agent)
     if state is None:
         can, _reason = can_prefetch(agent, messages, tokens)
         if not can:
@@ -367,12 +489,7 @@ def run_prefetch_compaction_step(
         new_messages, adopted, reason = adopt_prefetch_result(messages, state, result)
         if adopted:
             agent._last_compaction_in_place = bool(getattr(agent, "compression_in_place", True))
-            logger.info(
-                "Prefetch compaction adopted: %d -> %d messages, %d live suffix rows kept "
-                "(session %s)",
-                len(state.snapshot), len(new_messages), len(messages) - len(state.snapshot),
-                getattr(agent, "session_id", None) or "none",
-            )
+            _log_adoption(agent, state, messages, new_messages, reason)
             _report_prefetch_done(agent, state, new_messages)
             return "adopted", new_messages
         if reason:
@@ -404,6 +521,7 @@ def run_prefetch_compaction_step(
         new_messages, adopted, reason = adopt_prefetch_result(messages, state, result)
         if adopted:
             agent._last_compaction_in_place = bool(getattr(agent, "compression_in_place", True))
+            _log_adoption(agent, state, messages, new_messages, reason)
             _report_prefetch_done(agent, state, new_messages)
             return "adopted", new_messages
         if reason:
