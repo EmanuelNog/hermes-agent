@@ -34,6 +34,7 @@ from agent.conversation_compression import (
     resolve_compression_fallback_route,
     run_compress_context_with_progress_timeout,
 )
+from tests.waiting import wait_until
 
 CHAIN_ENTRY = {
     "provider": "custom",
@@ -323,7 +324,9 @@ def test_same_turn_fallback_retry_is_not_gated_by_the_primary_stall_backoff(tmp_
         routes.append((route["label"] if route else None, kwargs.get("bypass_cooldown", False)))
         if route is None:
             cancelled = getattr(compressor, "_compression_cancelled_check", None)
-            deadline = time.monotonic() + 5
+            # Bounded by the host fence: it cancels this attempt once the idle budget lapses, and the
+            # deadline here only stops a broken host from hanging the worker forever.
+            deadline = time.monotonic() + 30
             while time.monotonic() < deadline and not (callable(cancelled) and cancelled()):
                 time.sleep(0.0005)
             raise AuxiliaryExplicitCancellation()
@@ -334,12 +337,19 @@ def test_same_turn_fallback_retry_is_not_gated_by_the_primary_stall_backoff(tmp_
 
     def route_after_primary_unwound():
         # Pin the race outcome from the report: the primary persisted its backoff before the retry ran.
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline and compressor._summary_failure_cooldown_until <= time.monotonic():
-            time.sleep(0.001)
+        wait_until(
+            lambda: compressor._summary_failure_cooldown_until > time.monotonic(),
+            timeout=5.0,
+            what="the cancelled primary attempt to persist its stall_interrupted backoff",
+        )
         return real_route()
 
-    monkeypatch.setattr(cc, "resolve_context_compression_timeouts", lambda compression_cfg=None: (0.4, 4.0))
+    # Wall-clock bounds stay >= 2 s (tests/AGENTS.md): a 0.4 s idle fence loses the race on a loaded
+    # runner — the primary worker is not scheduled before it lapses, so no stall backoff is recorded,
+    # the retry's route resolution then waits out the shared ceiling and the retry never runs
+    # (routes == [], the 2026-11-01 battery flake). 2 s leaves the worker start slack; the 8 s ceiling
+    # leaves the retry a real window after the primary spends its own 2 s.
+    monkeypatch.setattr(cc, "resolve_context_compression_timeouts", lambda compression_cfg=None: (2.0, 8.0))
     monkeypatch.setattr(cc, "resolve_compression_fallback_route", route_after_primary_unwound)
     with _patch_chain([CHAIN_ENTRY]):
         out_msgs, _prompt = agent._compress_context(live, "sys", approx_tokens=50_000)
