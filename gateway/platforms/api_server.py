@@ -53,6 +53,7 @@ _STATIC_FEATURE_FLAGS = {
     "session_chat_streaming": True, "session_fork": True, "session_model_lock": True,
     "reasoning_streaming": True,
     "admin_config_rw": False, "jobs_admin": False, "memory_write_api": False,
+    "memory_read_api": True,
     "skills_api": True, "audio_api": False, "realtime_voice": False,
     "session_continuity_header": "X-Hermes-Session-Id",
     "session_key_header": "X-Hermes-Session-Key"}
@@ -75,6 +76,7 @@ _CAPABILITY_ENDPOINTS = (
     ("session_update", ("PATCH", "/api/sessions/{session_id}")),
     ("session_delete", ("DELETE", "/api/sessions/{session_id}")),
     ("session_messages", ("GET", "/api/sessions/{session_id}/messages")),
+    ("search", ("GET", "/api/search")),
     ("session_fork", ("POST", "/api/sessions/{session_id}/fork")),
     ("session_chat", ("POST", "/api/sessions/{session_id}/chat")),
     ("session_chat_stream", ("POST", "/api/sessions/{session_id}/chat/stream")),
@@ -116,6 +118,7 @@ from gateway.platforms import api_server_room_grants as _room_grants
 from gateway.platforms import api_server_runs as _api_runs
 from gateway.platforms.api_server_openai_routes import OpenAICompatRoutesMixin
 from gateway.platforms.api_server_memory_sessions import ApiServerMemorySessions
+from gateway.platforms.api_server_search import search_messages
 from gateway.platforms.api_server_bot_chat import reset_local_title_owner
 from gateway.platforms.base import (
     MEDIA_TAG_CLEANUP_RE, BasePlatformAdapter, SendResult, _terminal_sentinel_start, is_network_accessible,
@@ -1566,6 +1569,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             ("PATCH", "/api/sessions/{session_id}", self._handle_patch_session),
             ("DELETE", "/api/sessions/{session_id}", self._handle_delete_session),
             ("GET", "/api/sessions/{session_id}/messages", self._handle_session_messages),
+            ("GET", "/api/search", self._handle_search_messages),
             ("POST", "/api/sessions/{session_id}/fork", self._handle_fork_session),
             ("POST", "/api/sessions/{session_id}/chat", self._handle_session_chat),
             ("POST", "/api/sessions/{session_id}/chat/stream", self._handle_session_chat_stream),
@@ -2761,6 +2765,36 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                 "limit": limit, "offset": offset,
                 "order": order or ("latest" if default_page else "oldest"),
                 "returned": len(messages)}})
+
+    @_require_auth
+    async def _handle_search_messages(self, request: web.Request) -> web.Response:
+        """GET /api/search?q=&limit=&session=&role= — content search over the messages FTS index.
+
+        Read-only. Exists so an API client can look up what was *said*; `/api/sessions?title=` matches
+        session titles and ids only.
+        """
+        query = request.query.get("q") or request.query.get("query") or ""
+        try:
+            limit = int(request.query.get("limit", 20))
+        except (TypeError, ValueError):
+            return _error_response("limit must be an integer", 400, code="invalid_query")
+        session = request.query.get("session") or None
+        raw_roles = request.query.get("role") or ""
+        roles = tuple(r.strip() for r in raw_roles.split(",") if r.strip()) or None
+
+        db = await self._ensure_session_db_async()
+        conn = await asyncio.to_thread(db._get_read_conn)
+        if conn is None:
+            return _error_response("session store unavailable", 503, code="store_unavailable")
+        try:
+            hits = await asyncio.to_thread(
+                search_messages, conn, query, limit=limit, session_id=session, roles=roles)
+        except ValueError as err:
+            return _error_response(str(err), 400, code="invalid_query")
+        finally:
+            await asyncio.to_thread(db._close_read_conn, conn)
+        return web.json_response({"object": "hermes.search", "query": query,
+                                  "returned": len(hits), "hits": hits})
 
     @_require_auth
     async def _handle_fork_session(self, request: web.Request) -> web.Response:
