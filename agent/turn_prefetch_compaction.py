@@ -22,6 +22,7 @@ hygiene, Codex native and Responses-native paths are untouched.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import threading
@@ -39,7 +40,7 @@ _DB_PERSISTED_MARKER_CACHE: Optional[str] = None
 # then runs on a FRESH object whose transcript came from the SessionDB. Keyed by
 # session_id and bounded, so an evicted instance's result can still be adopted
 # instead of every gate arming another orphaned worker.
-_PENDING_BY_SESSION: "OrderedDict[str, Any]" = OrderedDict()
+_PENDING_BY_SESSION: OrderedDict[str, Any] = OrderedDict()
 _PENDING_REGISTRY_MAX = 32
 _PENDING_LOCK = threading.Lock()
 
@@ -67,14 +68,13 @@ def prefetch_trigger_tokens(compressor: Any, margin: float) -> Optional[int]:
     if ctx <= 0 or thr <= 0:
         return None
     trigger = thr - int(margin * ctx)
-    if trigger < 0:
-        trigger = 0
+    trigger = max(trigger, 0)
     if trigger >= thr:
         trigger = max(thr - 1, 0)
     return trigger
 
 
-def region_fully_persisted(messages: List[dict]) -> bool:
+def region_fully_persisted(messages: list[dict]) -> bool:
     """Every row must already be durable before the worker can archive it."""
     marker = _persisted_marker()
     for m in messages:
@@ -130,7 +130,7 @@ def _attach_pending(agent: Any) -> Optional[Any]:
     return state
 
 
-def can_prefetch(agent: Any, messages: List[dict], tokens: int) -> Tuple[bool, Optional[str]]:
+def can_prefetch(agent: Any, messages: list[dict], tokens: int) -> tuple[bool, Optional[str]]:
     """Ballot for arming the async worker at the current token level."""
     if not getattr(agent, "compression_enabled", False):
         return False, "disabled"
@@ -203,7 +203,7 @@ def _prefetch_elapsed_seconds(state: Any) -> int:
     if finished is None:
         finished = time.monotonic()
     try:
-        return max(0, int(round(finished - float(getattr(state, "started_at", finished) or finished))))
+        return max(0, round(finished - float(getattr(state, "started_at", finished) or finished)))
     except (TypeError, ValueError):
         return 0
 
@@ -215,7 +215,7 @@ def _report_prefetch_start(agent: Any, tokens: int) -> None:
     agent._emit_status(PREFETCH_COMPACTION_STATUS_TEMPLATE.format(tokens=max(0, int(tokens))))
 
 
-def _report_prefetch_done(agent: Any, state: Any, new_messages: List[dict]) -> None:
+def _report_prefetch_done(agent: Any, state: Any, new_messages: list[dict]) -> None:
     """Terminal edge: what was compacted, how many rows, and how long it took."""
     from agent.conversation_compression import PREFETCH_COMPACTION_DONE_STATUS_TEMPLATE
 
@@ -242,7 +242,7 @@ def _report_prefetch_failure(agent: Any, state: Any, exc: BaseException) -> None
     )
 
 
-def _summary_fingerprint(messages: List[dict]) -> Optional[str]:
+def _summary_fingerprint(messages: list[dict]) -> Optional[str]:
     """The compaction handoff text this list carries, normalized for comparison.
 
     The SessionDB drops message metadata, so the content prefix is the only part
@@ -264,7 +264,54 @@ def _summary_fingerprint(messages: List[dict]) -> Optional[str]:
     return None
 
 
-def _transcript_holds_our_commit(live_messages: List[dict], result_messages: List[dict]) -> bool:
+def _content_digest(content: Any) -> str:
+    """Stable short digest of a message body (unhashable shapes included)."""
+    if isinstance(content, str):
+        raw = content
+    else:
+        try:
+            raw = json.dumps(content, sort_keys=True, default=str)
+        except (TypeError, ValueError):  # pragma: no cover - exotic content only
+            raw = repr(content)
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _message_identity(msg: Any) -> tuple:
+    """Content-light identity of one message for the armed-prefix check.
+
+    Tool-result BODIES are deliberately excluded: the main thread's proactive
+    prune (``turn_preflight``) commits demoted bodies between arm and gate, and
+    the summary replaces the whole prefix anyway, so a demoted body is the same
+    history. Assistant tool-call ARGUMENTS are excluded for the same reason
+    (prune pass 3 truncates them). Everything that marks a real history change —
+    role sequence, tool-call wiring, assistant/user text — is included.
+    """
+    if not isinstance(msg, dict):
+        return ("raw", repr(msg))
+    role = msg.get("role")
+    if role == "tool":
+        call_id = msg.get("tool_call_id")
+        return ("tool", call_id) if call_id else ("tool", _content_digest(msg.get("content")))
+    if role == "assistant":
+        call_ids = tuple(
+            tc.get("id") for tc in (msg.get("tool_calls") or []) if isinstance(tc, dict)
+        )
+        return ("assistant", _content_digest(msg.get("content")), call_ids)
+    return (role, _content_digest(msg.get("content")))
+
+
+def _prefix_matches_identity(live_messages: list[dict], snap: list[dict]) -> bool:
+    """True when the live prefix is the armed prefix modulo prune demotion."""
+    n = len(snap)
+    if n == 0 or len(live_messages) < n:
+        return False
+    prefix = live_messages[:n]
+    if prefix == snap:
+        return True
+    return [_message_identity(m) for m in prefix] == [_message_identity(m) for m in snap]
+
+
+def _transcript_holds_our_commit(live_messages: list[dict], result_messages: list[dict]) -> bool:
     """True when the live transcript is already the compaction this worker committed.
 
     A fresh agent's list comes from the SessionDB, so it never matches the frozen
@@ -275,15 +322,17 @@ def _transcript_holds_our_commit(live_messages: List[dict], result_messages: Lis
 
 
 def adopt_prefetch_result(
-    live_messages: List[dict], state: Any, result: Any,
-) -> Tuple[List[dict], bool, Optional[str]]:
+    live_messages: list[dict], state: Any, result: Any,
+) -> tuple[list[dict], bool, Optional[str]]:
     """Splice a finished worker result onto the live list.
 
     Returns ``(new_messages, adopted, reason)``. The worker result (a fresh
     list) replaces the frozen snapshot prefix; everything the live list gained
-    after arming stays verbatim. Any divergence of the live prefix from the
-    snapshot discards the result — the seam must be byte-identical or the
-    summary is stale.
+    after arming stays verbatim. The prefix must be the SAME HISTORY, not the
+    same bytes: a proactive tool-result prune demoting bodies after arming
+    changes content without changing history, so it still adopts. A rewind, an
+    edit-resend or a competing compaction changes message identity and discards
+    the result — the summary is stale.
 
     One divergence is not staleness: when a DIFFERENT agent instance holds the
     live list (the gateway rebuilt the session between turns), the list was
@@ -298,7 +347,13 @@ def adopt_prefetch_result(
         return live_messages, False, "worker_noop"
     snap = state.snapshot
     n = len(snap)
-    if n == 0 or n > len(live_messages) or live_messages[:n] != snap:
+    # A content-only divergence is the main thread's proactive prune demoting
+    # tool bodies after arming: same history, so the paid-for summary still
+    # applies. Anything else (rewind, edit-resend, competing compaction) changes
+    # message identity and keeps the result stale.
+    if n == 0 or n > len(live_messages) or (
+        live_messages[:n] != snap and not _prefix_matches_identity(live_messages, snap)
+    ):
         if _transcript_holds_our_commit(live_messages, result_messages):
             return live_messages, True, "durable"
         return live_messages, False, "prefix_diverged"
@@ -322,7 +377,7 @@ def adopt_prefetch_result(
 
 
 def launch_prefetch_compression(
-    agent: Any, messages: List[dict], system_message: str, tokens: int,
+    agent: Any, messages: list[dict], system_message: str, tokens: int,
     task_id: str = "default",
 ) -> Optional[Any]:
     """Submit the snapshot worker on the shared compression pool WITHOUT awaiting.
@@ -359,7 +414,7 @@ def launch_prefetch_compression(
     snapshot = list(messages)
     arm_index = len(messages)
 
-    def _prefetch_worker(worker_fence: CompressionCommitFence) -> Tuple[list, str]:
+    def _prefetch_worker(worker_fence: CompressionCommitFence) -> tuple[list, str]:
         if worker_fence.deadline_exceeded or worker_fence.is_cancelled:
             return messages, ""
         from agent.conversation_compression import compress_context
@@ -410,7 +465,7 @@ def launch_prefetch_compression(
 
 
 def _log_adoption(
-    agent: Any, state: Any, live_messages: List[dict], new_messages: List[dict],
+    agent: Any, state: Any, live_messages: list[dict], new_messages: list[dict],
     reason: Optional[str],
 ) -> None:
     """One adopted-log shape for every seam (the E2E asserts on this line)."""
@@ -448,9 +503,9 @@ def _clear_pending_state(agent: Any) -> None:
 
 
 def run_prefetch_compaction_step(
-    agent: Any, messages: List[dict], tokens: int, *, system_message: Any = "",
+    agent: Any, messages: list[dict], tokens: int, *, system_message: Any = "",
     task_id: str = "default",
-) -> Tuple[str, List[dict]]:
+) -> tuple[str, list[dict]]:
     """One prefetch step at a gate. Returns ``(action, messages)``.
 
     actions:
