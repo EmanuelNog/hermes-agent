@@ -65,15 +65,3 @@ def test_failing_provider_is_skipped_not_fatal():
     mgr.add_provider(_FakeProvider("hindsight", RecallStatus("Hindsight", 1)))
     # The raising provider is swallowed; the healthy one still surfaces.
     assert "Hindsight" in mgr.describe_recall()
-
-
-def test_detail_false_renders_the_label_alone():
-    """A provider whose label already says what it recalled suppresses the footer."""
-    mgr = MemoryManager()
-    mgr.add_provider(_FakeProvider("builtin", RecallStatus("Prior Context Hint · 3 shown of 27 in 66ms", 0)))
-    with_footer = mgr.describe_recall()
-    assert with_footer.endswith("— recalled relevant memory")
-
-    mgr2 = MemoryManager()
-    mgr2.add_provider(_FakeProvider("builtin", RecallStatus("Prior Context Hint · 3 shown of 27 in 66ms", 0, detail=False)))
-    assert mgr2.describe_recall() == "🧠 Prior Context Hint · 3 shown of 27 in 66ms"

@@ -58,9 +58,6 @@ class RecallStatus:
     provider_label: str
     count: int
     glyph: str = INDICATOR_GLYPH
-    # False: render the label alone, with no "— recalled N memories" tail. A provider that already
-    # says what it recalled (session-hints: "5 shown of 12 in 66ms") does not need the footer.
-    detail: bool = True
 
 
 # Prompts with no semantic signal; single source of truth for the core prefetch gate and

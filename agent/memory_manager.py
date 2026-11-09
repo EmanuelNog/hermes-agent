@@ -432,9 +432,7 @@ class MemoryManager:
             # count <= 0: content injected but no discrete count (reflect)
             detail = ("recalled 1 memory" if status.count == 1 else f"recalled {status.count} memories"
                       if status.count > 1 else "recalled relevant memory")
-            label = f"{status.glyph} {status.provider_label}"
-            # detail=False: the provider's label is the whole line (see RecallStatus.detail)
-            segments.append(f"{label} — {detail}" if getattr(status, "detail", True) else label)
+            segments.append(f"{status.glyph} {status.provider_label} — {detail}")
         return "  ".join(segments)
 
     def queue_prefetch_all(self, query: str, *, session_id: str = "") -> None:
