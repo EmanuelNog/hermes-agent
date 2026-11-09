@@ -272,6 +272,18 @@ _SNAPSHOTS: tuple[tuple[str, Optional[str], str, dict], ...] = (
         "qwen3.8-flash": ("0.15", "0.47", "0.016", "0.20"),
         "deepseek-v4-pro": ("1.74", "3.48", "0.145"),
     }),
+    # Nous Portal inference, read off the portal's model list (2026-11-09). The portal
+    # publishes input/output only and carries several STAMPED DeepSeek variants side by
+    # side, so the entry is keyed on the model ids we record. Cache read follows
+    # DeepSeek's own cache-hit ratio (2% of input) for the same generation, which is what
+    # the upstream provider bills; the portal does not publish a cache rate.
+    ("nous", "https://portal.nousresearch.com (model list, 2026-11-09)", "nous-portal-2026-11-09", {
+        "deepseek/deepseek-v4.1-flash-1017": ("0.15", "0.60", "0.003"),
+        "deepseek/deepseek-v4.1-flash": ("0.11", "0.51", "0.0022"),
+        "deepseek/deepseek-v4-flash": ("0.05", "0.16", "0.001"),
+        "deepseek/deepseek-v4-flash-0423": ("0.09", "0.18", "0.0018"),
+        "deepseek/deepseek-v4-pro-0423": ("0.94", "1.89", "0.0188"),
+    }),
 )
 
 _OFFICIAL_DOCS_PRICING: dict[tuple[str, str], PricingEntry] = {}
@@ -378,6 +390,14 @@ for _provider, _alias, _canonical in (
        for suffix in ("pro", "900k")),
     ("google", "gemini-3.1-pro-preview", "gemini-3.1-pro"),
     ("google", "gemini-3.1-flash-lite-preview", "gemini-3.1-flash-lite"),
+    # Nous Portal records the vendor prefix in the id it returns; older rows and the
+    # picker use the bare name. The 0731 stamp is not on the portal list, whose plain
+    # "V4 Flash" row is what keeps being served under it.
+    ("nous", "deepseek-v4.1-flash-1017", "deepseek/deepseek-v4.1-flash-1017"),
+    ("nous", "deepseek/deepseek-v4-flash-0731", "deepseek/deepseek-v4-flash"),
+    ("nous", "deepseek-v4-flash-0731", "deepseek/deepseek-v4-flash"),
+    ("nous", "deepseek-v4-flash", "deepseek/deepseek-v4-flash"),
+    ("nous", "deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash"),
 ):
     _OFFICIAL_DOCS_PRICING[(_provider, _alias)] = _OFFICIAL_DOCS_PRICING[(_provider, _canonical)]
 del _provider, _alias, _canonical
