@@ -443,6 +443,27 @@ def running_from_selected_environment(project_root: Path) -> bool:
     return any(Path(entry).resolve() == selected for entry in sys.path if entry)
 
 
+#: Set in the environment of a process that runs the checkout's code on its own interpreter's
+#: packages instead of PM's: the isolated test environment marks itself (``tests/conftest.py``) and
+#: a child that models such a run keeps the marker. The boot then leaves it alone -- no source-update
+#: relaunch into the store Python and no ``sys.path`` rewrite onto the committed generation, either
+#: of which strips the packages only that interpreter carries (a non-quiet pytest run died building
+#: its header once ``pluggy``'s metadata was gone).
+OWN_PACKAGES_MARKER = "_HERMES_OWN_PACKAGES"
+
+
+def runs_on_its_own_packages() -> bool:
+    """Whether this process boots the checkout on packages of its own instead of PM's.
+
+    A test environment declares itself with ``OWN_PACKAGES_MARKER``: it imports boot modules
+    (``hermes_bootstrap``, ``gateway.run``) to exercise them, and PM taking the process over would
+    re-exec it into the store Python and rewrite ``sys.path`` onto the committed generation.
+    Everything a user launches -- the store Python, a generation's venv, a sealed payload's, a
+    developer's activated venv -- boots PM's tree as before.
+    """
+    return bool(os.environ.get(OWN_PACKAGES_MARKER))
+
+
 class NoCommittedEnvironment(RuntimeError):
     """PM's store Python with no committed generation: no retry fixes it, only `hermes pm repair`."""
 

@@ -573,14 +573,25 @@ class RelaunchExit(SystemExit):
     relaunched = True
 
 
-from pm.environments import activate_dependencies, install_state_permission_message
+from pm.environments import (
+    activate_dependencies,
+    install_state_permission_message,
+    runs_on_its_own_packages,
+)
 from hermes_cli._early_recovery import recover_if_needed
 
 from hermes_cli._parser import command_argv
 
+# The isolated test environment marks itself (``pm.environments.OWN_PACKAGES_MARKER``): it imports
+# boot modules on the packages it booted with, and taking the process over would strip them --
+# ``prepare_launch`` re-execs into PM's store Python and activation rewrites sys.path onto the
+# committed generation, after which importlib.metadata cannot find anything only that environment
+# carried (pluggy's metadata killed every non-quiet pytest run).
+_owns_packages = runs_on_its_own_packages()
+
 # Repair needs only stdlib. Do not activate the damaged tree to reach it.
 _pm_repair = command_argv(sys.argv[1:])[:2] == ["pm", "repair"]
-if not _pm_repair:
+if not _pm_repair and not _owns_packages:
     from hermes_cli.venv_sync import prepare_launch, relaunch_command
 
     try:
@@ -609,7 +620,8 @@ if not _pm_repair:
               file=sys.stderr)
     try:
         recover_if_needed(_root)
-        activate_dependencies(_root)
+        if not _owns_packages:
+            activate_dependencies(_root)
     except (RuntimeError, OSError) as exc:
         if isinstance(exc, PermissionError) and (message := install_state_permission_message(_root, exc)):
             print(f"hermes: {message}", file=sys.stderr)

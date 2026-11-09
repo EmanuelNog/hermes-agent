@@ -16,6 +16,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from tests.harness_env import launch_env
+
 
 @pytest.fixture
 def execution_ledger(tmp_path, monkeypatch):
@@ -764,8 +766,7 @@ def test_marked_worker_boots_dependencies_before_cron_jobs(marked):
     from cron import worker_bootstrap
 
     repo_root = Path(worker_bootstrap.__file__).resolve().parent.parent
-    env = {k: v for k, v in os.environ.items() if k != worker_bootstrap.WORKER_MARKER}
-    env["PYTHONPATH"] = str(repo_root)
+    env = launch_env(PYTHONPATH=str(repo_root))
     if marked:
         env[worker_bootstrap.WORKER_MARKER] = "1"
     child = subprocess.run(
@@ -827,8 +828,7 @@ def test_relaunch_replays_the_worker_before_its_ack(tmp_path, cause):
         "profile_home": str(tmp_path / "profile"),
     }), encoding="utf-8")
     ack, record = tmp_path / "exec-1.ready", tmp_path / "relaunch.json"
-    env = dict(os.environ, PYTHONPATH=str(repo_root))
-    env[worker_bootstrap.WORKER_MARKER] = "1"
+    env = launch_env(PYTHONPATH=str(repo_root), **{worker_bootstrap.WORKER_MARKER: "1"})
     child = subprocess.run(
         [sys.executable, "-c", _RELAUNCH_PROBE, str(payload), str(ack), str(record),
          worker_bootstrap.WORKER_MARKER, cause],
@@ -872,8 +872,7 @@ sys.stdin.read()
 def _marked_worker(repo_root: Path, stderr) -> subprocess.Popen:
     from cron import worker_bootstrap
 
-    env = dict(os.environ, PYTHONPATH=str(repo_root))
-    env[worker_bootstrap.WORKER_MARKER] = "1"
+    env = launch_env(PYTHONPATH=str(repo_root), **{worker_bootstrap.WORKER_MARKER: "1"})
     return subprocess.Popen(
         [sys.executable, "-c", _REAL_BOOT_PROBE], cwd=repo_root, env=env,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, text=True)

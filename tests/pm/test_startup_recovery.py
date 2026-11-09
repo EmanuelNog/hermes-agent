@@ -20,6 +20,7 @@ from pm.lock import Facts, Lockfile
 from pm.plugin_inputs import Members
 from pm.runtime import runtime_environment
 from pm.store import current_target, tree_digest
+from tests.harness_env import launch_env
 from tests.pm._fixtures import _wheel
 
 @pytest.fixture(autouse=True)
@@ -142,7 +143,7 @@ def test_bootstrap_repairs_before_dependency_activation(tmp_path, monkeypatch, m
         'print(json.dumps({"version": startup_dep.__version__, "file": startup_dep.__file__}))\n',
         encoding="utf-8",
     )
-    env = {**os.environ, "PYTHONPATH": str(core), "HERMES_PYTHON_SRC_ROOT": str(core)}
+    env = launch_env(PYTHONPATH=str(core), HERMES_PYTHON_SRC_ROOT=str(core))
     env.pop("PYTEST_CURRENT_TEST", None)  # this child owns an isolated copied installation
     control = subprocess.run(
         [sys.executable, "-S", "-c", f"import site; site.addsitedir({str(old_site)!r}); import startup_dep"],

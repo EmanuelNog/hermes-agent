@@ -11,6 +11,7 @@ from types import ModuleType
 import pytest
 
 from pm.environments import install_state_dir, install_state_permission_message
+from tests.harness_env import launch_env
 
 
 @pytest.mark.parametrize("phase", ["preparation", "activation"])
@@ -38,7 +39,7 @@ import hermes_bootstrap
 """
     result = subprocess.run(
         [sys.executable, "-S", "-c", code, str(target), phase],
-        env={**os.environ, "PYTHONPATH": str(root)},
+        env=launch_env(PYTHONPATH=str(root)),
         capture_output=True, text=True, timeout=30,
         check=False,
     )
@@ -70,7 +71,7 @@ raise SystemExit(main(["repair"]))
 """
     result = subprocess.run(
         [sys.executable, "-c", code, str(target)],
-        env={**os.environ, "PYTHONPATH": str(root)},
+        env=launch_env(PYTHONPATH=str(root)),
         capture_output=True, text=True, timeout=30,
         check=False,
     )

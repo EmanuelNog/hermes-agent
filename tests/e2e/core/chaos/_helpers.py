@@ -111,6 +111,8 @@ def write_chaos_home(root: Path, base_url: str, **cfg: Any) -> tuple[Path, Path]
 def hermetic_env(home: Path, hermes_home: Path, tag: str) -> dict[str, str]:
     """Child env: fake HOME/HERMES_HOME, no real credentials, repo importable, and a
     tag every descendant inherits so the orphan scan can find it after reparenting."""
+    from pm.environments import OWN_PACKAGES_MARKER
+
     env = {
         k: v for k, v in os.environ.items()
         if not (
@@ -130,6 +132,10 @@ def hermetic_env(home: Path, hermes_home: Path, tag: str) -> dict[str, str]:
         # HOME *is* the tmp root, so the live-DB guard (pytest ancestry) would read the
         # tmp state.db as "production"; the documented child opt-out is safe here.
         "HERMES_STATE_DB_GUARD_BYPASS": "1",
+        # The strip above drops the suite's mark; carry it explicitly. The child runs the
+        # checkout's code on THIS interpreter's packages, and PM's boot must not provision a
+        # dependency generation under the fake home or re-exec it into the store Python.
+        OWN_PACKAGES_MARKER: "1",
         "TZ": "UTC",
         "NO_COLOR": "1",
     })

@@ -107,7 +107,7 @@ def test_broken_environment_keeps_explicit_repair_entry_reachable(tmp_path, monk
     import os
     import subprocess
     import sys
-    from pm.environments import runtime_facts_path
+    from pm.environments import OWN_PACKAGES_MARKER, runtime_facts_path
 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
     repo = Path(__file__).resolve().parents[2]
@@ -115,7 +115,10 @@ def test_broken_environment_keeps_explicit_repair_entry_reachable(tmp_path, monk
     record.parent.mkdir(parents=True)
     record.write_text(json.dumps({"packages": {"venv": {"environment": str(tmp_path / "missing")}}}))
     code = "import sys; sys.argv = ['hermes', *sys.argv[1:]]; import hermes_bootstrap; print('bootstrap-ready')"
-    result = subprocess.run([sys.executable, "-c", code, *command], env=dict(os.environ),
+    # A launch, not a test-environment run: PM must take this child over (tests/conftest.py marks
+    # every process it starts, and the boot leaves a marked one on its own packages).
+    child_env = {k: v for k, v in os.environ.items() if k != OWN_PACKAGES_MARKER}
+    result = subprocess.run([sys.executable, "-c", code, *command], env=child_env,
                             capture_output=True, text=True, timeout=30, check=False)
     assert (result.returncode == 0) is allowed, result.stderr
     if not allowed:
@@ -188,6 +191,60 @@ def test_boot_never_activates_the_pre_pm_venv(tmp_path, monkeypatch, interpreter
     expected = ("refused: no dependency environment is committed" if interpreter == "store"
                 else "legacy importable: False")
     assert result.stdout.strip().startswith(expected), result.stdout
+
+
+def test_boot_leaves_a_foreign_venv_its_own_packages_and_interpreter(tmp_path, monkeypatch):
+    """chk-n5va.91: the isolated test environment (and any child it starts, which inherits its
+    ``OWN_PACKAGES_MARKER``) runs the checkout's code on the packages it booted with. Importing a
+    boot module selected the committed generation for it anyway: ``prepare_launch`` re-exec'd the
+    process into PM's store Python and ``activate_dependencies`` rewrote ``sys.path`` onto the
+    generation, so ``importlib.metadata`` no longer found anything only the booted environment
+    carried (pluggy's metadata killed every non-quiet pytest run — chk-n5va.90).
+    """
+    import os
+    import subprocess
+    import sys
+    from pm import environments as runtime_paths
+
+    repo = Path(__file__).resolve().parents[2]
+    assert os.environ.get(runtime_paths.OWN_PACKAGES_MARKER), \
+        "tests/conftest.py must mark the suite; this test reads that mark from the child env"
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    generation = runtime_paths.install_state_dir(repo) / "environments" / "g1" / "venv"
+    generation_only = runtime_paths.site_packages(generation)
+    generation_only.mkdir(parents=True)
+    (generation / "pyvenv.cfg").write_text("home = test\n", encoding="utf-8")
+    (generation_only / "generation_only.py").write_text("NAME = 'g1'\n", encoding="utf-8")
+    runtime_paths.runtime_facts_path(repo).write_text(json.dumps({"schema": 1, "packages": {
+        "venv": {"environment": str(generation), "extras": [], "stamp": "test"},
+    }}), encoding="utf-8")
+
+    foreign = tmp_path / "dev"
+    subprocess.run([getattr(sys, "_base_executable", sys.executable), "-m", "venv",
+                    "--without-pip", str(foreign)], check=True, timeout=120)
+    own_packages = runtime_paths.site_packages(foreign)
+    (own_packages / "own_package.py").write_text("NAME = 'own'\n", encoding="utf-8")
+    dist_info = own_packages / "own_package-1.2.3.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: own-package\nVersion: 1.2.3\n", encoding="utf-8")
+    code = (
+        "import importlib.metadata as md, importlib.util, sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import hermes_bootstrap\n"
+        "print('version:', md.version('own-package'))\n"
+        "print('generation selected:', importlib.util.find_spec('generation_only') is not None)\n"
+        "print('relaunched:', getattr(sys, '_hermes_relaunched', False))\n"
+        "print('prefix:', sys.prefix)\n"
+    )
+    result = subprocess.run([str(runtime_paths.venv_python(foreign)), "-c", code, str(repo)],
+                            env={**os.environ, "PYTHONPATH": str(repo)},
+                            capture_output=True, text=True, timeout=180, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "version: 1.2.3", "generation selected: False", "relaunched: False",
+        f"prefix: {foreign}",
+    ], result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("data", [[], {"packages": []}, {"packages": {"venv": []}}])

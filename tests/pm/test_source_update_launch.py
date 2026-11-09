@@ -23,6 +23,7 @@ from pm.environments import install_state_dir, runtime_facts_path, selected_venv
 from pm import paths
 from pm.lock import Facts
 from pm.package import InstallError
+from tests.harness_env import launch_env
 from tests.pm._fixtures import isolated_python
 
 # Spawns children with a home it builds itself; the parent's must stay real.
@@ -123,7 +124,7 @@ def test_source_python_pin_update_survives_real_gc(source_launch, tmp_path, monk
     _launchers.ensure_install_launchers(root, root / ".hermes" / "bin")
     command = _launchers.installation_command(root, module="source_probe")
     (site_packages(selected_venv(root)) / "selected_probe.py").write_text("VALUE = 'A'\n")
-    child_env = {**os.environ, "HERMES_DISABLE_LAZY_INSTALLS": "1"}
+    child_env = launch_env(HERMES_DISABLE_LAZY_INSTALLS="1")
     before = subprocess.run(command, env=child_env, capture_output=True, text=True, timeout=30, check=False)
     assert before.returncode == 0, before.stderr
     assert json.loads(before.stdout)["executable"] == str(old_python)
@@ -433,7 +434,7 @@ def test_real_bootstrap_reexecs_before_app_imports(source_launch, tmp_path, isol
     before_receipts = _receipts(tmp_path)
     result = subprocess.run(
         [str(isolated_python), *invocation, *args], cwd=root,
-        env=dict(os.environ), capture_output=True, text=True, timeout=60,
+        env=launch_env(), capture_output=True, text=True, timeout=60,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -488,7 +489,7 @@ def test_failed_launch_completion_degrades_to_a_warning(source_launch, tmp_path,
 
     result = subprocess.run(
         [str(isolated_python), str(entry), *argv], cwd=root,
-        env=dict(os.environ), capture_output=True, text=True, timeout=60,
+        env=launch_env(), capture_output=True, text=True, timeout=60,
         check=False,
     )
 

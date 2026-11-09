@@ -201,6 +201,16 @@ os.environ["HERMES_TEST_ISOLATION"] = os.environ.get("HERMES_HOME", "") or "1"
 # on whether botocore was importable yet.
 os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
 
+# The suite imports boot modules (``hermes_bootstrap``, ``gateway.run``) on the test environment's
+# packages. Mark the process so PM's boot leaves it alone: activating the install's committed
+# generation re-execs into the store Python and rewrites sys.path, which strips the metadata only
+# this environment carries (a non-quiet pytest run died building its header on pluggy's). Set
+# before any test module imports, and inherited by every child that models such a run; a child that
+# models a real launcher instead must drop it (``tests/pm/test_runtime_selection.py`` does).
+from pm.environments import OWN_PACKAGES_MARKER
+
+os.environ[OWN_PACKAGES_MARKER] = os.environ.get(OWN_PACKAGES_MARKER, "1")
+
 #: HERMES_HOME as it stood when conftest was imported - i.e. before any test
 #: module could import code that configures logging. Recorded so the guard in
 #: tests/test_log_isolation.py can assert the sandbox existed AT THAT MOMENT.
