@@ -299,7 +299,7 @@ def run_sign_in(
     except Exception as exc:  # health: allow BLE001 -- the generator's contract is one terminal state, never a raise
         yield Failed(reason="", detail=str(exc))
         return
-    if state and not _core.is_guest_state(state) and not replace_account:
+    if _core.has_nous_identity(state) and not replace_account:
         yield AlreadySignedIn()
         return
 

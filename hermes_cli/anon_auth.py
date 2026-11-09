@@ -170,6 +170,23 @@ def is_guest_state(state: Any) -> bool:
     return isinstance(state, dict) and state.get("auth_method") == ANON_AUTH_METHOD
 
 
+def has_nous_identity(state: Any) -> bool:
+    """A usable Nous credential — not merely a leftover ``providers.nous`` record.
+
+    The record outlives the tokens: after a revoked refresh session (2026-10-25,
+    ``code: invalid_grant``) it kept its metadata, lost ``access_token`` and
+    ``refresh_token`` and carried ``last_auth_error.relogin_required``. Gates that
+    tested only the record's EXISTENCE answered "Already signed in." forever while
+    every Nous call failed and fell back to the keyless tier.
+    """
+    if not isinstance(state, dict) or is_guest_state(state):
+        return False
+    error = state.get("last_auth_error")
+    if isinstance(error, dict) and error.get("relogin_required"):
+        return False
+    return bool(state.get("access_token") or state.get("refresh_token"))
+
+
 def is_anonymous_request(provider: Any, api_key: Any) -> bool:
     """Select anonymous error UX from the credential actually sent, never the saved profile or URL.
 

@@ -191,7 +191,8 @@ async def test_a_failed_code_push_does_not_abort_the_drain(monkeypatch):
 @pytest.mark.asyncio
 async def test_already_signed_in_starts_no_task(monkeypatch):
     runner = _runner(monkeypatch)
-    monkeypatch.setattr(anon_auth, "current_nous_state", lambda: {"auth_method": "oauth"})
+    monkeypatch.setattr(anon_auth, "current_nous_state",
+                        lambda: {"auth_method": "oauth", "access_token": "at", "refresh_token": "rt"})
     flow = MagicMock()
     monkeypatch.setattr(anon_auth, "run_sign_in", flow)
 
