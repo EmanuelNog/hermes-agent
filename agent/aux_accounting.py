@@ -11,6 +11,7 @@ to worker threads via ``tools.thread_context`` and to asyncio tasks automaticall
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Optional
 
@@ -40,6 +41,29 @@ def reset_accounting_context(token) -> None:
         _accounting.reset(token)
     except Exception:
         _accounting.set(None)
+
+
+@contextmanager
+def accounting_scope(session_db: Any, session_id: Optional[str]):
+    """Publish accounting handles for a call that may run outside an agent turn; restore after.
+
+    Compaction is the caller that needs this: its summary spend has to land on the per-task
+    ledger whoever drove it (a turn, ``/compress`` through ``session.mutate``, gateway hygiene
+    on a temporary agent). Those paths summarize on a worker thread without a turn's context, so
+    without this the aux chokepoint found no session and dropped the spend — ``task='compression'``
+    under-reported summarisation by the amount of every out-of-turn compaction.
+
+    An already-published handle wins: inside a turn the spend belongs to the session the turn
+    started with (compression mints continuation ids mid-turn), never to a later rebind.
+    """
+    if _accounting.get() is not None or session_db is None or not session_id:
+        yield
+        return
+    token = _accounting.set((session_db, session_id))
+    try:
+        yield
+    finally:
+        reset_accounting_context(token)
 
 
 def record_aux_usage(

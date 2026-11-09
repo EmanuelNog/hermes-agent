@@ -134,8 +134,12 @@ class MicroCompactionMixin:
             })
 
         try:
-            with aux_interrupt_protection():
-                response = call_llm(**call_kwargs)
+            # Same out-of-turn accounting as the full summary call: a micro pass that runs without a
+            # turn's context still owes its spend to the session it compacted.
+            from agent.aux_accounting import accounting_scope
+            with accounting_scope(getattr(self, "_session_db", None), getattr(self, "_session_id", "")):
+                with aux_interrupt_protection():
+                    response = call_llm(**call_kwargs)
         except Exception as exc:
             logger.info("micro-summarization call failed: %s", exc)
             return None

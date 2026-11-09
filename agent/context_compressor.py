@@ -3814,8 +3814,13 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             self.summary_model or self.model, f"{len(prompt):,}", _latency_info["prompt_build_ms"],
         )
         try:
-            with aux_interrupt_protection():
-                response = call_llm(**call_kwargs)
+            # A compaction driven outside a turn (/compress via session.mutate, gateway hygiene on a
+            # temporary agent) has no ambient session: publish the bound one so the summary's spend
+            # lands on the per-task ledger instead of vanishing (#chk-n5va.87).
+            from agent.aux_accounting import accounting_scope
+            with accounting_scope(getattr(self, "_session_db", None), getattr(self, "_session_id", "")):
+                with aux_interrupt_protection():
+                    response = call_llm(**call_kwargs)
         finally:
             route_known = bool(_aux_route.get("provider") and _aux_route.get("model"))
             _aux_model = _aux_route.get("model") or self.summary_model or self.model or ""
