@@ -7,13 +7,22 @@ These tests exercise the full async message flow:
         → adapter.send() (captured by mock)
 
 No LLM, no real platform connections.
+
+``gateway.run`` is imported inside :func:`make_runner`, never at module scope: importing it boots
+``hermes_bootstrap``, which selects PM's committed dependency generation and rewrites ``sys.path``.
+That happens before pytest builds its session-start header, so a non-quiet run lost the metadata of
+every test-environment package (``pluggy`` included) and died with
+``PackageNotFoundError``/INTERNALERROR.
 """
+
+from __future__ import annotations
 
 import asyncio
 import sys
 import uuid
 from datetime import datetime, timezone, UTC
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,9 +30,11 @@ import pytest
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.base import SendResult
 from gateway.platforms.event import MessageEvent
-from gateway.run import GatewayRunner
 from gateway.session import SessionEntry, SessionSource, build_session_key
 from hermes_cli.version_info import _reset_version_info_cache
+
+if TYPE_CHECKING:  # runtime import lives in make_runner; see the module docstring
+    from gateway.run import GatewayRunner
 
 # E2E tests compare against real hermes processes, which resolve the checkout's real
 # identity; drop the root conftest's seeded version so in-process lookups agree.
@@ -176,6 +187,8 @@ def make_runner(platform: Platform, session_entry: SessionEntry = None) -> Gatew
 
     Skips __init__ to avoid filesystem/network side effects.
     """
+    from gateway.run import GatewayRunner  # boots PM dependency selection; see the module docstring
+
     if session_entry is None:
         session_entry = make_session_entry(platform)
 
