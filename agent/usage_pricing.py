@@ -255,6 +255,23 @@ _SNAPSHOTS: tuple[tuple[str, Optional[str], str, dict], ...] = (
         "kimi-k2p7-code-fast": ("1.90", "8.00", "0.38"), "glm-5p2-fast": ("2.10", "6.60", "0.21"),
         "glm-5p1-fast": ("2.80", "8.80", "0.52"),
     }),
+    # OpenCode Console (opencode.ai) PAY-AS-YOU-GO list, per 1M tokens. This is
+    # the Zen provider: charged per request against console credits, so its rows
+    # are real money. OpenCode Go is a SEPARATE subscription (`opencode-go*`,
+    # routed to subscription_included below) whose included usage has no invoice;
+    # the same model id buys different rates on each, which is why the provider is
+    # part of the key. Cache write is published for Kimi K3 / Qwen 3.8 Flash only.
+    # Rows verified against https://opencode.ai/docs/console/models (#pricing).
+    ("opencode-zen", "https://opencode.ai/docs/console/models#pricing", "opencode-console-2026-11-09", {
+        "deepseek-v4.1-flash": ("0.30", "1.20", "0.006"),
+        "gemini-3.5-flash-lite": ("0.30", "2.50", "0.03"),
+        "kimi-k2.6": ("0.95", "4.00", "0.16"),
+        "kimi-k2.7-code": ("0.95", "4.00", "0.19"),
+        "kimi-k3": ("3.00", "15.00", "0.30", "3.00"),
+        "kimi-k3.1-pro": ("2.00", "10.00", "0.20", "2.00"),
+        "qwen3.8-flash": ("0.15", "0.47", "0.016", "0.20"),
+        "deepseek-v4-pro": ("1.74", "3.48", "0.145"),
+    }),
 )
 
 _OFFICIAL_DOCS_PRICING: dict[tuple[str, str], PricingEntry] = {}
@@ -397,6 +414,9 @@ def _first_nonzero(obj: Any, *paths: tuple[str, ...]) -> int:
 # api.openai.com). Google and Fireworks are matched by name OR host below.
 _SNAPSHOT_PROVIDER_ALIASES = {
     "anthropic": "anthropic", "openai": "openai", "openai-api": "openai", "minimax": "minimax", "minimax-cn": "minimax-cn",
+    # OpenCode Zen, pay-as-you-go. ``opencode`` is the legacy pre-rename id; a
+    # custom provider pointing at the Zen host resolves here by base_url too.
+    "opencode-zen": "opencode-zen", "opencode": "opencode-zen", "zen": "opencode-zen",
 }
 # AI Studio and Vertex host the same Gemini models (the Vertex "google/" vendor
 # prefix is stripped with the rest of the path).
@@ -425,6 +445,12 @@ def resolve_billing_route(
 
     if provider_name == "openai-codex":
         return BillingRoute(provider="openai-codex", model=model, base_url=url, billing_mode="subscription_included")
+    # OpenCode Go (and its credential-pool variants ``opencode-go-2``/``-3``, plus
+    # custom providers named ``opencode-go-*``) is a monthly plan with included
+    # usage: there is no per-token invoice, and pricing it at Zen's pay-as-you-go
+    # list would report money that was never charged.
+    if provider_name.startswith("opencode-go") or ("opencode.ai" in base and "/zen/go" in base):
+        return BillingRoute(provider="opencode-go", model=model, base_url=url, billing_mode="subscription_included")
     if provider_name == "openrouter" or host("openrouter.ai"):
         return BillingRoute(provider="openrouter", model=model, base_url=url, billing_mode="official_models_api")
     if provider_name == "nous" or host("inference-api.nousresearch.com"):
