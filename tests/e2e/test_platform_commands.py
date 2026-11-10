@@ -17,7 +17,7 @@ import pytest
 
 from gateway.config import Platform
 from gateway.platforms.base import SendResult
-from tests.e2e.conftest import make_event, send_and_capture
+from tests.e2e.conftest import send_and_capture
 
 
 class TestSlashCommands:
@@ -140,30 +140,48 @@ class TestAuthorization:
         """Unauthorized DM should trigger pairing code, not a command response."""
         runner._is_user_authorized = lambda _source: False
 
-        event = make_event(platform, "/help")
-        adapter.send.reset_mock()
-        await adapter.handle_message(event)
-        await asyncio.sleep(0.3)
+        # Poll for the send (send_and_capture) instead of a fixed delay: the ingress gates
+        # before the authorization branch do profile-scoped reads and thread hops, so the
+        # pairing offer lands well after handle_message returns.
+        send = await send_and_capture(adapter, "/help", platform)
 
         # The adapter.send is called directly by the authorization path
         # (not via _send_with_retry), so check it was called with a pairing message
-        adapter.send.assert_called()
-        response_text = adapter.send.call_args[0][1] if len(adapter.send.call_args[0]) > 1 else ""
+        send.assert_called()
+        response_text = send.call_args[1].get("content") or send.call_args[0][1]
         assert "recognize" in response_text.lower() or "pair" in response_text.lower() or "ABC123" in response_text
+
+    @pytest.mark.asyncio
+    async def test_unauthorized_pairing_survives_slow_ingress(self, adapter, runner, platform):
+        """A pairing offer must not be lost when ingress takes longer than a fixed window.
+
+        The ingress gates before the authorization branch do profile-scoped reads and thread
+        hops (``_authorization_home_for_source``, plugin hooks), so the offer lands well after
+        ``handle_message`` returns. A fixed settle delay makes that a coin flip; polling for the
+        send is what this asserts.
+        """
+        runner._is_user_authorized = lambda _source: False
+
+        async def _slow_hook(event, _source):
+            await asyncio.sleep(0.4)
+            return event
+
+        runner._hm_pre_gateway_dispatch_hook = _slow_hook
+
+        send = await send_and_capture(adapter, "/help", platform)
+
+        send.assert_called()
 
     @pytest.mark.asyncio
     async def test_unauthorized_user_does_not_get_help(self, adapter, runner, platform):
         """Unauthorized user should NOT see the help command output."""
         runner._is_user_authorized = lambda _source: False
 
-        event = make_event(platform, "/help")
-        adapter.send.reset_mock()
-        await adapter.handle_message(event)
-        await asyncio.sleep(0.3)
+        send = await send_and_capture(adapter, "/help", platform)
 
-        # If send was called, it should NOT contain the help text
-        if adapter.send.called:
-            response_text = adapter.send.call_args[0][1] if len(adapter.send.call_args[0]) > 1 else ""
+        # Whatever was sent (the pairing offer, or nothing), it must never be the help text.
+        for call in send.call_args_list:
+            response_text = call.kwargs.get("content") or (call.args[1] if len(call.args) > 1 else "")
             assert "/new" not in response_text
 
 
@@ -176,9 +194,7 @@ class TestSendFailureResilience:
         adapter.send = AsyncMock(return_value=SendResult(success=False, error="network timeout"))
         adapter.set_message_handler(adapter._message_handler) # re-wire with same handler
 
-        event = make_event(platform, "/help")
-        # Should not raise — pipeline handles send failures internally
-        await adapter.handle_message(event)
-        await asyncio.sleep(0.3)
+        # Poll for the send: a fixed delay races the same ingress thread hops.
+        send = await send_and_capture(adapter, "/help", platform)
 
-        adapter.send.assert_called()
+        send.assert_called()
