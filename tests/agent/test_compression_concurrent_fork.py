@@ -1161,14 +1161,14 @@ def test_review_fork_compacts_oversized_snapshot_in_memory(tmp_path: Path) -> No
     the parent's SessionDB/session_id and enables in-memory-only compaction.
 
     This test drives the REAL ``_run_review_in_thread`` + ``run_conversation``
-    with a threshold-crossing snapshot across two provider requests and
-    asserts:
-      • the FIRST request replays the full snapshot untouched (warm
-        prompt-cache parity) — no compaction summary, middle turns present;
-      • compression actually fired before the SECOND request (a real
-        threshold crossing, not just setup-time binding state), and that
-        request carries the compaction summary and none of the middle
-        snapshot turns;
+    with a threshold-crossing snapshot across two provider requests, twice: once
+    with a window the snapshot FITS (no summary may be spent — chk-n5va.94) and
+    once with a window it exceeds (the #93057 bound), and asserts:
+      • the fitting run makes both requests WITHOUT any compaction summary
+        (a fork never spends a threshold-only summary);
+      • the exceeds-window run replays warm on the first request, then
+        compacts before the second — the compaction summary present and none
+        of the middle snapshot turns;
       • the fork keeps the parent's session_id (prompt-cache parity) but its
         agent-level AND compressor-level session bindings are detached;
       • the parent's durable transcript, session row, and child-session graph
@@ -1252,11 +1252,21 @@ def test_review_fork_compacts_oversized_snapshot_in_memory(tmp_path: Path) -> No
 
     real_run_conversation = AIAgent.run_conversation
 
+    # Model window the fork's request is measured against. A pass is justified
+    # only when the request cannot be sent at all (chk-n5va.94): a fork that
+    # merely crosses the summary threshold spends 90 s of aux time for a summary
+    # of a transcript that dies with the run, and any live turn cancelling it
+    # kills that call. ``request_exceeds_model_window`` reads the compressor's
+    # ``context_length``, so flipping this between the two review runs is what
+    # selects "fits" vs "cannot be sent".
+    window = {"context_length": 64_000}
+
     def _run_threshold_crossing_review(self, *args, **kwargs):
         captured["compression_enabled"] = self.compression_enabled
         captured["compression_in_place"] = self.compression_in_place
         captured["session_id"] = self.session_id
         captured["session_db"] = self._session_db
+        captured["window"] = window["context_length"]
         captured["input_budget"] = getattr(
             self, "_review_input_token_budget", "missing"
         )
@@ -1272,6 +1282,7 @@ def test_review_fork_compacts_oversized_snapshot_in_memory(tmp_path: Path) -> No
         # Stub the fork's compressor so compaction output is deterministic
         # and no aux-LLM call happens; the trigger/commit paths stay real.
         self.context_compressor.threshold_tokens = 1
+        self.context_compressor.context_length = window["context_length"]
         self.context_compressor.protect_first_n = 1
         self.context_compressor.protect_last_n = 1
         self.context_compressor.compress = MagicMock(
@@ -1337,6 +1348,33 @@ def test_review_fork_compacts_oversized_snapshot_in_memory(tmp_path: Path) -> No
 
     try:
         with patch.object(AIAgent, "run_conversation", _run_threshold_crossing_review):
+            # (1) A fork request that still FITS its window spends no summary,
+            # even though the snapshot crosses the summary threshold — the
+            # transcript dies with the run, so the pass buys nothing
+            # (chk-n5va.94). Both requests still go out, uncompacted.
+            window["context_length"] = 64_000
+            br._run_review_in_thread(parent, snapshot, "review this conversation")
+            fitting = dict(captured)
+            assert fitting["compression_calls"] == 0, (
+                "a review fork that fits its window must not spend a summary "
+                f"(chk-n5va.94); compress ran {fitting['compression_calls']} time(s)"
+            )
+            assert fitting["create_calls"] == 2, (
+                "the fitting review should still make both requests (tool call "
+                f"+ final); got {fitting['create_calls']}"
+            )
+            fitting_contents = [
+                str(m.get("content", ""))
+                for request in fitting["outbound"] for m in (request or [])
+            ]
+            assert not any(
+                "[CONTEXT COMPACTION]" in text for text in fitting_contents
+            ), "the fitting review compacted its snapshot after all"
+
+            # (2) A request that cannot be sent at all (above the model window)
+            # is the one case that still justifies a pass: the #93057 bound
+            # (an unbounded replayed snapshot) must hold.
+            window["context_length"] = 1
             br._run_review_in_thread(parent, snapshot, "review this conversation")
 
         assert captured["compression_calls"] >= 1, (
