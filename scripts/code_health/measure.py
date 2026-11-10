@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 import io
+import sys
+import time
 import tokenize
 import json
 import re
@@ -19,6 +21,8 @@ from scripts.code_health.ruff_runner import run_ruff
 from scripts.code_health.ts_measure import measure_ts
 
 _PATTERNS_FILE = Path("scripts/ci/profile_scope_patterns.json")
+# How often a long measure reports where it has got to (stderr). See Measurer._tick.
+_PROGRESS_SECONDS = 10.0
 
 
 def _regex_rules(repo: Path) -> list[tuple[str, re.Pattern[str], re.Pattern[str] | None]]:
@@ -112,14 +116,27 @@ class Measurer:
         self.ruff = ruff
         self.ctx = py_rules.Ctx(known_env=known_env)
         self.regex_rules = _regex_rules(repo)
+        self._started = self._last_tick = time.monotonic()
+
+    def _tick(self, done: int, total: int) -> None:
+        """A throttled progress line on stderr: a long measure must never look like a hang."""
+        now = time.monotonic()
+        if total < 2 or now - self._last_tick < _PROGRESS_SECONDS:
+            return
+        self._last_tick = now
+        print(f"code health: measured {done}/{total} files ({now - self._started:.0f}s)",
+              file=sys.stderr)
 
     def measure(self, tree: str | None, paths: list[str]) -> dict[str, FileMeasure]:
+        self._started = self._last_tick = time.monotonic()
         contents = {}
-        for path in paths:
+        for index, path in enumerate(paths, start=1):
             if in_scope(path):
                 text = read_file(self.repo, tree, path)
                 if text is not None:
                     contents[path] = text
+            self._tick(index, len(paths))
+
         if tree is None:
             return self._measure_in(self.repo, contents)
         with tempfile.TemporaryDirectory(prefix="code-health-") as tmp:
@@ -137,11 +154,15 @@ class Measurer:
         py = sorted(p for p in contents if in_scope(p) == "py")
         ts = sorted(p for p in contents if in_scope(p) == "ts")
         ruff_out = run_ruff(self.ruff, root, py) if py else {}
-        for path in py:
+        for index, path in enumerate(py, start=1):
             self._python(result[path], contents[path], ruff_out.get(path))
+            self._tick(index, len(contents))
+        done = 0
         ts_out = measure_ts(self.repo, root, ts) if ts else {}
         for path in ts:
             self._typescript(result[path], ts_out.get(path))
+            done += 1
+            self._tick(len(py) + done, len(contents))
         return result
 
     def _python(self, fm: FileMeasure, text: str, ruff_file) -> None:

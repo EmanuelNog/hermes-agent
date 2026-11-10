@@ -120,6 +120,8 @@ _GUARDS = {
 # (the blob-size step of repo-guards.yml).
 _DIFF_GUARDS = {"blob-size": ["scripts/ci/check_blob_size.py"]}
 _CHECKS = (*_GUARDS, *_DIFF_GUARDS, "ruff", "health")
+# Every job's cap: a check that hangs becomes a reported failure instead of a silent stall.
+_JOB_TIMEOUT = 900
 
 
 @dataclass
@@ -130,10 +132,15 @@ class _Job:
 
 
 def _run(job: _Job) -> tuple[int, str]:
-    proc = subprocess.run(
-        job.argv, cwd=job.cwd, env=job.env, capture_output=True, text=True, encoding="utf-8",
-        errors="replace", stdin=subprocess.DEVNULL, timeout=900, check=False,
-    )
+    try:
+        proc = subprocess.run(
+            job.argv, cwd=job.cwd, env=job.env, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", stdin=subprocess.DEVNULL, timeout=_JOB_TIMEOUT, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        # A hung job must fail this lane loudly: the eight-hour stall (#chk-n5va.97) reported
+        # nothing at all, and an uncaught TimeoutExpired only printed a queued-up traceback.
+        return 124, f"timed out after {_JOB_TIMEOUT}s: {' '.join(job.argv)}"
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
