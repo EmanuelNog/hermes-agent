@@ -214,6 +214,20 @@ def _idle_compaction(
         out.current_turn_user_idx = _reanchor(agent, out.messages, user_message)
 
 
+def _arm_display_snapshot(agent: Any, compressor: Any) -> None:
+    """Arm the interrupted-turn rollback seed from the compressor's preflight snapshot.
+
+    getattr guard: compressor doubles and plugin engines lack this method — absence means no
+    snapshot and the finalizer's rollback stays disarmed. Type pin: MagicMock compressors return
+    truthy Mock objects — only a real int snapshot may arm it.
+    """
+    _snapshot_fn = getattr(compressor, "snapshot_preflight_display_tokens", None)
+    if callable(_snapshot_fn):
+        _snapshot_val = _snapshot_fn()
+        if isinstance(_snapshot_val, int) and not isinstance(_snapshot_val, bool):
+            agent._turn_preflight_display_snapshot = _snapshot_val
+
+
 def _codex_native_auto_compaction(agent: Any) -> bool:
     """Codex app-server threads are compacted by the codex agent itself; Hermes only
     initiates compaction in "hermes" mode."""
@@ -255,15 +269,10 @@ def _preflight_compression(
     _preflight_tokens = _tc._preflight_request_tokens(
         agent, out.messages, out.active_system_prompt or ""
     )
-    # getattr guard: compressor doubles and plugin engines lack this method — absence
-    # means no snapshot and the finalizer's rollback stays disarmed.
-    _snapshot_fn = getattr(_compressor, "snapshot_preflight_display_tokens", None)
-    if callable(_snapshot_fn):
-        _snapshot_val = _snapshot_fn()
-        # Type pin: MagicMock compressors return truthy Mock objects — only a real int
-        # snapshot may arm the interrupted-turn rollback.
-        if isinstance(_snapshot_val, int) and not isinstance(_snapshot_val, bool):
-            agent._turn_preflight_display_snapshot = _snapshot_val
+    if _tc._review_fork_threshold_only(agent, _preflight_tokens):
+        # A review fork that still fits its window: no summary to spend (see the helper).
+        return
+    _arm_display_snapshot(agent, _compressor)
     # An anchored figure is real usage + delta: never deferred.
     _preflight_deferred = not getattr(agent, "_request_pressure_anchored", False) and getattr(
         _compressor, "should_defer_preflight_to_real_usage", lambda _tokens: False

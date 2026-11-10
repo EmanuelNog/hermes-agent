@@ -909,6 +909,10 @@ def _detach_fork_compression(review_agent: Any) -> None:
             )
     review_agent.compression_in_place = True
     review_agent.compression_enabled = detached
+    # Tag the fork for the automatic compression gates: a fork replays the parent's snapshot
+    # and its transcript dies with the run, so only not *fitting* the window justifies a pass
+    # (see ``agent.turn_context._review_fork_threshold_only``).
+    review_agent._background_review_fork = True
     if detached:
         review_agent._review_defer_compaction_before_first_response = True
 

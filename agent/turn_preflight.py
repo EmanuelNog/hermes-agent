@@ -19,7 +19,7 @@ from agent.conversation_compression import (
     compression_skipped_due_to_lock, context_compression_timed_out, conversation_history_after_compression,
 )
 from agent.conversation_compression_feasibility import ensure_compression_feasibility_checked
-from agent.turn_context import _review_fork_first_request_pending
+from agent.turn_context import _review_fork_first_request_pending, _review_fork_threshold_only
 from agent.turn_context_compaction import (
     _apply_grown_window, _blocked_compress_reason, _clear_overflow_warn, _refund_api_call,
     _reanchor, _reset_retry_state_after_compaction,
@@ -118,6 +118,7 @@ def run_preflight_compression(
     if (
         _eligible
         and not _review_fork_first_request_pending(agent)
+        and not _review_fork_threshold_only(agent, request_pressure_tokens)
         and (not v._preflight_compression_blocked or provider_overflow_preflight)
         and (not defer_preflight(request_pressure_tokens) or provider_overflow_preflight)
         and not _compression_cooldown
@@ -333,7 +334,16 @@ def compress_after_tool_results(
         )
         _reset_retry_state_after_compaction(agent)
 
-    if agent.compression_enabled and compression_attempts < max_compression_attempts:
+    # A review fork that still fits its window never spends a summary here (see the helper);
+    # ``elif`` below skips it too, so a deliberate skip never reports attempts_exhausted.
+    _fork_threshold_only = _review_fork_threshold_only(agent, _real_tokens)
+    if (
+        agent.compression_enabled
+        and compression_attempts < max_compression_attempts
+        and not _fork_threshold_only
+    ):
+        # Aux clamp must land before the first compaction fires on the main-window threshold (#114707).
+        # Before the cooldown read: a moved compression route clears the previous summariser's cooldown.
         ensure_compression_feasibility_checked(agent, _real_tokens)
     if (
         agent.compression_enabled
@@ -342,6 +352,7 @@ def compress_after_tool_results(
             getattr(_compressor, "awaiting_real_usage_after_compression", False)
         )
         and not _prefetch_skip_blocking
+        and not _fork_threshold_only
         and _compressor.should_compress(_real_tokens)
     ):
         compression_attempts += 1
@@ -398,7 +409,7 @@ def compress_after_tool_results(
                 turn_exit_reason = "compaction_handoff_not_actionable"
                 return _verdict(True)
             current_turn_user_idx = _reanchor(agent, messages, user_message)
-    elif agent.compression_enabled:
+    elif agent.compression_enabled and not _fork_threshold_only:
         # Over threshold but compression blocked (cooldown/anti-thrash): deduped
         # warning so context can't silently overflow. ``attempts_spent`` names the
         # attempts_exhausted lockout when the engine says RUN but the per-turn

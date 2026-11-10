@@ -495,6 +495,21 @@ def _review_fork_first_request_pending(agent: Any) -> bool:
     )
 
 
+def _review_fork_threshold_only(agent: Any, request_tokens: Any) -> bool:
+    """Whether an automatic pass would be a review fork merely crossing the summary threshold.
+
+    The fork replays the parent's snapshot and its transcript is discarded when the run ends, so
+    a threshold-crossing summary there buys nothing — and it is pure loss when preempted: a live
+    turn cancelling the review is the only thing that ever stops a fork mid-summary, which kills
+    the 90 s aux call in flight. Only a request that cannot be sent at all justifies a pass.
+    Dormant off a fork; an unknown window stays conservative (skip)."""
+    if not getattr(agent, "_background_review_fork", False):
+        return False
+    from agent.conversation_compression import request_exceeds_model_window
+
+    return request_exceeds_model_window(agent, request_tokens) is not True
+
+
 def _compression_warrants_another_preflight_pass(
     orig_tokens: int, new_tokens: int, threshold_tokens: int
 ) -> bool:

@@ -53,6 +53,20 @@ def _persisted_marker() -> str:
     return _DB_PERSISTED_MARKER_CACHE
 
 
+def _prefetch_refusal(agent: Any) -> Optional[str]:
+    """Why this agent may never arm the async worker, whatever the token level.
+
+    ``disabled``: automatic compaction is off. ``review_fork``: a background-review fork — it
+    replays the parent's snapshot and dies with the run, so a proactive summary below the
+    threshold buys nothing there (see ``agent.turn_context._review_fork_threshold_only``).
+    """
+    if not getattr(agent, "compression_enabled", False):
+        return "disabled"
+    if getattr(agent, "_background_review_fork", False):
+        return "review_fork"
+    return None
+
+
 def prefetch_trigger_tokens(compressor: Any, margin: float) -> Optional[int]:
     """Prompt-token level that arms the async worker; None when disabled.
 
@@ -132,8 +146,9 @@ def _attach_pending(agent: Any) -> Optional[Any]:
 
 def can_prefetch(agent: Any, messages: list[dict], tokens: int) -> tuple[bool, Optional[str]]:
     """Ballot for arming the async worker at the current token level."""
-    if not getattr(agent, "compression_enabled", False):
-        return False, "disabled"
+    _refusal = _prefetch_refusal(agent)
+    if _refusal:
+        return False, _refusal
     # Codex app-server threads are owned by the codex agent; Hermes must never start
     # compression for them outside the codex_app_server_auto policy (compress_context
     # would route to the app-server's thread compaction behind that switch).
