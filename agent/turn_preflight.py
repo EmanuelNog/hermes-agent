@@ -265,6 +265,27 @@ class PostToolCompressionVerdict:
     current_turn_user_idx: int
 
 
+def _note_declined_post_tool_compaction(agent: Any, reason: str, real_tokens: int) -> None:
+    """ONE INFO line per user turn when the post-tool gate declines an at/above-trigger pass.
+
+    A decline left no trace at all (chk-n5va.98: a live session sent 550K-token requests with no
+    compaction attempt and nothing in any log, so the branch that went quiet could not be named).
+    Deduped on the user-turn counter: a 300-iteration tool turn logs one line, not 300. Silent
+    below the trigger, where declining is simply healthy.
+    """
+    threshold = int(getattr(agent.context_compressor, "threshold_tokens", 0) or 0)
+    if threshold <= 0 or real_tokens < threshold:
+        return
+    marker = (reason, int(getattr(agent, "_user_turn_count", 0) or 0))
+    if getattr(agent, "_declined_post_tool_compaction", None) == marker:
+        return
+    agent._declined_post_tool_compaction = marker
+    logger.info(
+        "post-tool compression declined (%s): %d tokens >= threshold %d, turn %d continues "
+        "uncompacted", reason, real_tokens, threshold, marker[1],
+    )
+
+
 def compress_after_tool_results(
     agent: Any, *, messages: list[dict[str, Any]], system_message: Any, user_message: Any,
     active_system_prompt: Any, conversation_history: Any, compression_attempts: int,
@@ -292,10 +313,6 @@ def compress_after_tool_results(
         )
 
     _compressor = agent.context_compressor
-    # A new checkpoint must reach the provider before stale usage can trigger
-    # local compression, overflow warnings, or destructive tool-result pruning.
-    if bool(getattr(_compressor, "awaiting_real_usage_after_compression", False)):
-        return _verdict(False)
     # Real usage decides: the anchor is the provider's last prompt count plus a rough delta for
     # ONLY the tool results appended since (the raw last_prompt_tokens ignores them). Right after
     # a compaction (-1 sentinel) there is no real count yet: never treat the schema-heavy rough
@@ -317,6 +334,14 @@ def compress_after_tool_results(
             agent, messages, active_system_prompt or "",
             estimate_request_tokens_rough(messages, tools=agent.tools or None),
         )
+
+    # A new checkpoint must reach the provider before stale usage can trigger
+    # local compression, overflow warnings, or destructive tool-result pruning.
+    if bool(getattr(_compressor, "awaiting_real_usage_after_compression", False)):
+        _note_declined_post_tool_compaction(agent, "awaiting_real_usage_after_compression",
+                                            _real_tokens)
+        return _verdict(False)
+
 
 # Prefetch: adopt a finished background summary or arm one without
     # blocking; while a worker is pending the blocking branch must not fire.
@@ -394,6 +419,7 @@ def compress_after_tool_results(
             # #69870 lock-skip: this pass no-oped because another path holds the session's compression lock
             # — a temporary defer, not evidence about compressibility.
             compression_attempts -= 1
+            _note_declined_post_tool_compaction(agent, "lock_skip_refunded", _real_tokens)
         else:
             conversation_history = conversation_history_after_compression(
                 agent, messages, conversation_history
@@ -421,6 +447,15 @@ def compress_after_tool_results(
             agent._warn_context_overflow_blocked(
                 _block_reason, _real_tokens, int(getattr(_compressor, "threshold_tokens", 0) or 0)
             )
+        # Recorded either way: that warning is UI-only (deduped per block kind) and never reaches
+        # a log file, which is exactly what left chk-n5va.98's quiet branch unnameable.
+        _note_declined_post_tool_compaction(
+            agent,
+            f"blocked:{_block_reason}" if _block_reason
+            else f"skip_attempts={compression_attempts}/{max_compression_attempts},"
+                 f"prefetch={_prefetch_action}",
+            _real_tokens,
+        )
         _pruned_msgs = _proactive_tool_result_prune(agent, _compressor, messages, _real_tokens)
         if _pruned_msgs is not messages:
             messages = _pruned_msgs
@@ -428,6 +463,14 @@ def compress_after_tool_results(
             # read_file bodies survive only as one-line markers, so the repeat-read dedup must
             # stop answering "unchanged" for them or the reload the marker asks for is refused.
             _reset_read_dedup_caches(effective_task_id, session_id=agent.session_id or "")
+    else:
+        # Neither branch ran: compression is off for this agent, or a review fork is only crossing
+        # the threshold (a pass there buys nothing). Over the trigger, that is still a decision
+        # someone will want named later (#chk-n5va.98).
+        _note_declined_post_tool_compaction(
+            agent, "review_fork_threshold_only" if _fork_threshold_only else "compression_disabled",
+            _real_tokens,
+        )
     return _verdict(False)
 
 

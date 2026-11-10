@@ -458,3 +458,46 @@ def test_tooling_failure_exits_2_without_a_traceback(tmp_path, monkeypatch, caps
     assert cli.main(["--base", base, "--head", "HEAD"]) == 2
     err = capsys.readouterr().err
     assert err.startswith("code health:") and "npm" in err
+
+
+# --- an unbounded diff fails loudly instead of grinding for hours -------------------------------
+
+
+def _many_files(repo: Path, count: int) -> dict[str, str]:
+    return {f"pkg/f{i}.py": f"def f{i}():\n    return {i}\n" for i in range(count)}
+
+
+def test_implicit_base_over_the_file_cap_fails_loudly(tmp_path, monkeypatch, capsys):
+    """A stale origin/main makes the merge-base the whole tree; that must stop with the reason
+    in hand in the first second, not measure 29,520 files with zero output (chk-n5va.97)."""
+    repo, _base = _ratchet_repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "work")  # only an unmerged branch has an implicit base
+    _commit(repo, _many_files(repo, 4))
+    monkeypatch.setattr(cli, "_MAX_DIFF_FILES", 2)
+    monkeypatch.chdir(repo)
+    assert cli.main([]) == 2
+    err = capsys.readouterr().err
+    assert "4 files differ" in err and "--base" in err and "--max-files" in err, err
+
+
+def test_explicit_base_is_never_capped(tmp_path, monkeypatch, capsys):
+    """A caller who names the base has judged the diff: the cap is only for the implicit one."""
+    repo, base = _ratchet_repo(tmp_path)
+    _commit(repo, _many_files(repo, 4))
+    monkeypatch.setattr(cli, "_MAX_DIFF_FILES", 1)
+    monkeypatch.chdir(repo)
+    assert cli.main(["--base", base]) == 0
+    assert "--max-files" not in capsys.readouterr().err
+
+
+def test_a_long_measure_reports_progress_on_stderr(tmp_path, monkeypatch, capsys):
+    """Whatever a measure takes, stderr says how far it got — the 8h stall had 0 bytes of log."""
+    from scripts.code_health import measure
+
+    repo, base = _ratchet_repo(tmp_path)
+    head = _commit(repo, _many_files(repo, 3))
+    monkeypatch.setattr(measure, "_PROGRESS_SECONDS", 0.0)
+    assert cli.run(repo, base, head) == 0
+    captured = capsys.readouterr()
+    assert "measuring 3 changed" in captured.err
+    assert "measured 3/3 files" in captured.err
