@@ -88,6 +88,26 @@ retained tokens** — but its answer route (pinned to `nous/google/gemini-4-argo
 also degraded into fallbacks during that window, so treat 93.3% as provisional and re-run it
 cleanly next to the image arm.
 
+### Free readers do not read the pages — they invent them
+
+Before spending anything, the $0 OpenRouter vision SKUs were probed for verbatim read of four known
+lines from a rendered page (exact-match grading, no judge):
+
+| reader | exact lines |
+|---|---:|
+| `nvidia/nemotron-3.5-super-vl:free` | 0/4 (empty answer) |
+| `google/gemma-4-31b-it:free` | 0/4 |
+| `thinkingmachines/inkling-2-small:free` | 0/4 |
+
+Worse than zero: the misses are fluent and plausible. Gemma produced `msg100 assistant: deploying
+archival shards, calibrating` for a page line that reads `msg100 assistant: edited
+evals/compaction/runner.py line 100; commit 3aafa9bb1a1e; error E100: cannot resolve symbol 'x100'`;
+inkling repeated "the quick brown fox" over four different rows. This is exactly the failure pxpipe's
+own `docs/NOT-OCR.md` predicts — a VLM has no per-glyph stage to fail loudly on, so an unreadable
+page yields confident boilerplate rather than an error. It also means an image arm scored by a free
+reader would measure the reader's imagination, not pxpipe: the recall comparison needs a Tier-1
+reader (nous `gemini-4-argon` after the daily window resets, or paid OpenRouter `gemini-3.8-flash`).
+
 Open question to answer when a healthy vision route exists:
 
 1. `current` and `pxpipe` on the same two lineages, same 15-question bank, same reader, same judge —
