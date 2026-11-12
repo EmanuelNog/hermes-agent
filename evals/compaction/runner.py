@@ -19,6 +19,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -156,12 +157,20 @@ def keyword_search(archive: list, query: str, top_k: int = 4, excerpt_chars: int
 EVAL_USAGE = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0}
 
 
+def _answer_route_label(media_reader: str) -> str:
+    """Which route answered the exam: the env override wins, else the arm's own
+    reader (image arms), else the configured auxiliary default."""
+    env_p = os.environ.get("EVAL_ANSWER_PROVIDER")
+    env_m = os.environ.get("EVAL_ANSWER_MODEL")
+    if env_p or env_m:
+        return f"{env_p or '?'}/{env_m or '?'}"
+    return media_reader or "aux default"
+
+
 def _call(prompt: str, max_tokens: int = 2000) -> str:
     """Answer/judge transport. EVAL_ANSWER_PROVIDER / EVAL_ANSWER_MODEL override the
     route so two arms can be read by the SAME model (an arm's recall difference must
     not be a reader-model difference)."""
-    import os
-
     from agent.auxiliary_client import call_llm
 
     route = {}
@@ -438,6 +447,10 @@ def run_policy(name: str, spec: dict, messages, questions, out_dir: Path,
         "after_text_tokens": total_tokens(compressed),
         "after_image_tokens": image_tokens,
         "after_msgs": len(compressed),
+        # Who answered the exam. Two arms' recall is comparable only when this
+        # matches; 'aux default' means the configured auxiliary route.
+        "answer_route": _answer_route_label(
+            f"{reader_provider}/{reader_model}" if media else ""),
         "compress_seconds": round(elapsed, 1),
         "recall_pct": round(100 * sum(scored) / (2 * len(scored)), 1) if scored else 0.0,
         "scores": scored,
