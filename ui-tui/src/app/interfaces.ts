@@ -525,6 +525,10 @@ export interface InputHandlerContext {
     selection: SelectionApi
     stdout?: NodeJS.WriteStream
   }
+  /** Transcript navigation that needs the whole item list (Ctrl+↑ / Ctrl+↓ turn jumps). */
+  transcript?: {
+    jumpTurn: (direction: -1 | 1) => void
+  }
   voice: {
     enabled: boolean
     recordKey: ParsedVoiceRecordKey

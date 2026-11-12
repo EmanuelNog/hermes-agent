@@ -12,6 +12,7 @@ import Output from '../../packages/hermes-ink/src/ink/output.js'
 import { scrollFastPathStats as sourceScrollFastPathStats } from '../../packages/hermes-ink/src/ink/render-node-to-output.js'
 import { renderSync as renderSourceSync } from '../../packages/hermes-ink/src/ink/root.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
+import { jumpToAdjacentTurn, turnLandingRow } from '../lib/turnJump.js'
 
 interface Item {
   height: number
@@ -619,6 +620,51 @@ describe('ScrollBox renderer bounds', () => {
       expect(streams.stderr.read()?.toString() ?? '').toBe('')
     } finally {
       vi.restoreAllMocks()
+      instance.unmount()
+      instance.cleanup()
+    }
+  })
+})
+
+describe('transcript turn jump (Ctrl+↑ / Ctrl+↓)', () => {
+  it('reads real measured offsets and lands on the previous prompt', async () => {
+    // Real transcript shape: prompt (3 rows) + reply (6 rows), three times.
+    const items = [
+      { height: 3, key: 'prompt-0', text: 'prompt 0' },
+      { height: 6, key: 'reply-0', text: 'reply 0' },
+      { height: 3, key: 'prompt-1', text: 'prompt 1' },
+      { height: 6, key: 'reply-1', text: 'reply 1' },
+      { height: 3, key: 'prompt-2', text: 'prompt 2' },
+      { height: 6, key: 'reply-2', text: 'reply 2' }
+    ]
+
+    const msgs = items.map(item => ({ role: item.key.startsWith('prompt') ? 'user' : 'assistant' }))
+    const expose = { current: null as Exposed | null }
+    const streams = makeStreams()
+
+    const instance = renderSync(React.createElement(Harness, { expose, items }), {
+      patchConsole: false,
+      stderr: streams.stderr as NodeJS.WriteStream,
+      stdin: streams.stdin as NodeJS.ReadStream,
+      stdout: streams.stdout as NodeJS.WriteStream
+    })
+
+    try {
+      await delay(20)
+      const scroll = expose.current!.scroll!
+      const offsets = expose.current!.virtualHistory.offsets
+
+      // Sit at the bottom, reading the newest reply.
+      scroll.scrollToBottom()
+      await delay(20)
+
+      const index = jumpToAdjacentTurn(scroll, msgs, offsets, -1)
+      await delay(20)
+
+      expect(index).toBe(2)
+      expect(scroll.getScrollTop()).toBe(turnLandingRow(offsets[2]!))
+      expect(offsets[2]).toBeGreaterThan(0)
+    } finally {
       instance.unmount()
       instance.cleanup()
     }

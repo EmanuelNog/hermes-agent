@@ -43,6 +43,7 @@ import { createResizeCoalescer } from '../lib/resizeCoalescer.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { terminalParityHints } from '../lib/terminalParity.js'
 import { formatAbandonedClarify, sameToolTrailGroup, toolTrailLabel } from '../lib/text.js'
+import { jumpToAdjacentTurn } from '../lib/turnJump.js'
 import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
 import { onUserWidgets } from '../sdk/userWidgets.js'
 import type { Msg, PanelSection } from '../types.js'
@@ -588,6 +589,25 @@ export function useMainApp(gw: GatewayClient) {
     [selection]
   )
 
+  // Ctrl+↑ / Ctrl+↓ land on the previous / next prompt instead of scrolling row by row. The row
+  // numbers come from the virtual history's prefix offsets — the same source RewindFocusScroller
+  // uses — so a jump needs no mounting and works across turns that were never rendered.
+  const jumpTurn = useCallback(
+    (direction: -1 | 1) => {
+      const s = scrollRef.current
+
+      if (s) {
+        jumpToAdjacentTurn(
+          s,
+          virtualRows.map(row => row.msg),
+          virtualHistory.offsets,
+          direction
+        )
+      }
+    },
+    [virtualHistory.offsets, virtualRows]
+  )
+
   const appendMessage = useCallback(
     (msg: Msg) => setHistoryItems(prev => appendTranscriptMessage(prev, msg)),
     [setHistoryItems]
@@ -1018,6 +1038,7 @@ export function useMainApp(gw: GatewayClient) {
     composer: { actions: composerActions, refs: composerRefs, state: composerState },
     gateway,
     terminal: { hasSelection, scrollRef, scrollWithSelection, selection, stdout },
+    transcript: { jumpTurn },
     voice: {
       enabled: voiceEnabled,
       recordKey: voiceRecordKey,

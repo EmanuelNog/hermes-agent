@@ -45,6 +45,7 @@ export const chromeEn = {
     rewindPicker: 'empty composer, idle: Esc then Esc browses earlier prompts to edit (/rewind)',
     applyCompletion: 'apply completion',
     arrows: 'completions / queue edit / history',
+    jumpTurn: 'transcript: previous / next turn (prompt)',
     sessionSwitcher: 'open live session switcher (deletes queued message while editing)',
     expandAgents: 'expand live agents (keeps your draft)',
     pasteExpand: 'expand / collapse a pasted-text chip (sent pastes when the composer has none)',

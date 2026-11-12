@@ -272,6 +272,7 @@ export const browseScrollRow = (
 ) => (key.ctrl || key.meta || key.shift ? 0 : key.upArrow || ch === 'k' ? -1 : key.downArrow || ch === 'j' ? 1 : 0)
 
 export function shouldFallThroughForScroll(key: {
+  ctrl?: boolean
   downArrow: boolean
   pageDown: boolean
   pageUp: boolean
@@ -292,8 +293,27 @@ export function shouldFallThroughForScroll(key: {
     return true
   }
 
+  // Ctrl+↑ / Ctrl+↓ (turn jumps) must keep working while an approval/clarify prompt is up:
+  // the whole point is reading the turn the prompt is asking about.
+  if (key.ctrl && (key.upArrow || key.downArrow)) {
+    return true
+  }
+
   return false
 }
+
+/**
+ * Ctrl+↑ / Ctrl+↓: previous / next turn. `0` leaves the key to its existing owner — Alt/Option+
+ * arrows are tmux's session switching, Shift+arrows already scroll a single row, and plain arrows
+ * drive completions and composer history.
+ */
+export const turnJumpDirection = (key: {
+  ctrl: boolean
+  downArrow: boolean
+  meta: boolean
+  shift: boolean
+  upArrow: boolean
+}): -1 | 0 | 1 => (key.ctrl && !key.meta && !key.shift && (key.upArrow || key.downArrow) ? (key.upArrow ? -1 : 1) : 0)
 
 export function applyVoiceRecordResponse(
   response: null | VoiceRecordResponse,
@@ -428,7 +448,7 @@ function handlePagerKey(ch: string, key: Key, pagerPageSize: number) {
 }
 
 export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
-  const { actions, composer, gateway, terminal, voice, wheelStep } = ctx
+  const { actions, composer, gateway, terminal, transcript, voice, wheelStep } = ctx
   const { actions: cActions, refs: cRefs, state: cState } = composer
 
   const overlay = useStore($overlayState)
@@ -827,6 +847,13 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
     if (key.shift && key.downArrow) {
       return scrollTranscript(1)
+    }
+
+    // Ctrl+↑ / Ctrl+↓ jump a whole turn (previous / next prompt) instead of scrolling by rows.
+    const jumpTurnBy = turnJumpDirection(key)
+
+    if (jumpTurnBy) {
+      return transcript?.jumpTurn(jumpTurnBy)
     }
 
     if (key.pageUp || key.pageDown) {

@@ -393,6 +393,7 @@
   "hints.expandAgents",
   "hints.homeEnd",
   "hints.interpolate",
+  "hints.jumpTurn",
   "hints.jumpWord",
   "hints.killLine",
   "hints.lineStartEnd",

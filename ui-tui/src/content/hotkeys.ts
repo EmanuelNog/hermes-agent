@@ -30,6 +30,7 @@ export function hotkeys(): [string, string][] {
     ['Esc Esc', h.rewindPicker],
     ['Tab', h.applyCompletion],
     ['↑/↓', h.arrows],
+    ['Ctrl+↑/↓', h.jumpTurn],
     ['Ctrl+X', h.sessionSwitcher],
     ['Ctrl+T', h.expandAgents],
     ['Ctrl+P', h.pasteExpand],

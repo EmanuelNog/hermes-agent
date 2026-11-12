@@ -10,10 +10,12 @@ import {
   resolveCtrlCComposerAction,
   resolveDoubleEscAction,
   shouldDetachEditedHistoryInput,
-  shouldFallThroughForScroll
+  shouldFallThroughForScroll,
+  turnJumpDirection
 } from '../app/useInputHandlers.js'
 
 const baseKey = {
+  ctrl: false,
   downArrow: false,
   pageDown: false,
   pageUp: false,
@@ -22,6 +24,21 @@ const baseKey = {
   wheelDown: false,
   wheelUp: false
 }
+
+describe('turnJumpDirection — Ctrl+↑ / Ctrl+↓ jump turn to turn', () => {
+  it('maps Ctrl+ArrowUp to the previous turn, Ctrl+ArrowDown to the next', () => {
+    expect(turnJumpDirection({ ...baseKey, ctrl: true, upArrow: true })).toBe(-1)
+    expect(turnJumpDirection({ ...baseKey, ctrl: true, downArrow: true })).toBe(1)
+  })
+
+  it('leaves every other arrow combination to its existing owner', () => {
+    expect(turnJumpDirection({ ...baseKey, ctrl: true })).toBe(0)
+    expect(turnJumpDirection(baseKey)).toBe(0)
+    // Alt/Option+arrows belong to tmux (session switching), Shift+arrows scroll one row.
+    expect(turnJumpDirection({ ...baseKey, ctrl: true, meta: true, upArrow: true })).toBe(0)
+    expect(turnJumpDirection({ ...baseKey, ctrl: true, shift: true, downArrow: true })).toBe(0)
+  })
+})
 
 describe('shouldFallThroughForScroll — keep transcript scrolling alive during prompt overlays', () => {
   it('falls through for wheel scrolls', () => {
@@ -37,6 +54,11 @@ describe('shouldFallThroughForScroll — keep transcript scrolling alive during 
   it('falls through for Shift+ArrowUp / Shift+ArrowDown', () => {
     expect(shouldFallThroughForScroll({ ...baseKey, shift: true, upArrow: true })).toBe(true)
     expect(shouldFallThroughForScroll({ ...baseKey, shift: true, downArrow: true })).toBe(true)
+  })
+
+  it('falls through for Ctrl+ArrowUp / Ctrl+ArrowDown (turn jumps)', () => {
+    expect(shouldFallThroughForScroll({ ...baseKey, ctrl: true, upArrow: true })).toBe(true)
+    expect(shouldFallThroughForScroll({ ...baseKey, ctrl: true, downArrow: true })).toBe(true)
   })
 
   it('does NOT fall through for plain arrows — those drive in-prompt selection', () => {
