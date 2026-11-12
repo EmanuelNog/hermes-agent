@@ -50,6 +50,7 @@ from agent.model_metadata import (
 from agent.replayed_reasoning import codex_reasoning_replay_tokens, strip_opaque_replay_items
 from agent.context_default_record import last_defaulted_context_length
 from agent.redact import redact_sensitive_text
+from agent.compaction_text import _redact_compaction_text, neutralize_summary_role_labels
 from agent.turn_context import drop_stale_api_content
 from tools.todo_tool import TODO_INJECTION_HEADER
 
@@ -1163,13 +1164,6 @@ _TASK_SNAPSHOT_HEADINGS = (HISTORICAL_TASK_HEADING, _LEGACY_ACTIVE_TASK_HEADING)
 _HISTORICAL_TASK_SECTION_RE = re.compile(
     rf"(?ms)^(?:{'|'.join(re.escape(heading) for heading in _TASK_SNAPSHOT_HEADINGS)})\s*\n.*?(?=^## |\Z)"
 )
-
-
-def _redact_compaction_text(text: Any) -> str:
-    """Redact text that crosses a compaction summary boundary (strict mode).
-    ``force=True`` overrides ``security.redact_secrets: false``; URL credentials are redacted too, since
-    summaries persist and re-enter every later prompt."""
-    return redact_sensitive_text(text or "", force=True, redact_url_credentials=True)
 
 
 def _dedupe_append(items: list[str], value: str, *, limit: int) -> None:
@@ -3407,7 +3401,7 @@ class ContextCompressor(
         args = _redact_compaction_text(fn.get("arguments", ""))
         if len(args) > self._TOOL_ARGS_MAX:
             args = args[:self._TOOL_ARGS_HEAD] + "..."
-        return f"  {fn.get('name', '?')}({args})"
+        return f"  {fn.get('name', '?')}({neutralize_summary_role_labels(args)})"
 
     def _serialize_records_for_summary(self, turns: list[dict[str, Any]]) -> list[str]:
         """Serialize turns into a list of labeled, redacted records for the summarizer."""
@@ -3421,6 +3415,7 @@ class ContextCompressor(
                 content = "\n".join(_summary_part_text(part) for part in content if isinstance(part, (dict, str)))
             content = _redact_compaction_text(content or "")
             content = _MEDIA_DIRECTIVE_RE.sub("[media attachment]", content)
+            content = neutralize_summary_role_labels(content)
             # Strip inline <think>-style blocks: scratch work wastes summarizer context and risks being kept as fact.
             if role == "assistant" and content:
                 content = strip_think_blocks(None, content)
