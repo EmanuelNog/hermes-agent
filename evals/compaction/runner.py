@@ -157,12 +157,24 @@ EVAL_USAGE = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_to
 
 
 def _call(prompt: str, max_tokens: int = 2000) -> str:
+    """Answer/judge transport. EVAL_ANSWER_PROVIDER / EVAL_ANSWER_MODEL override the
+    route so two arms can be read by the SAME model (an arm's recall difference must
+    not be a reader-model difference)."""
+    import os
+
     from agent.auxiliary_client import call_llm
+
+    route = {}
+    if os.environ.get("EVAL_ANSWER_PROVIDER"):
+        route["provider"] = os.environ["EVAL_ANSWER_PROVIDER"]
+    if os.environ.get("EVAL_ANSWER_MODEL"):
+        route["model"] = os.environ["EVAL_ANSWER_MODEL"]
 
     resp = call_llm(
         messages=[{"role": "user", "content": prompt}],
         task="compression",
         max_tokens=max_tokens,
+        **route,
     )
     usage = getattr(resp, "usage", None)
     if usage is not None:
@@ -295,6 +307,17 @@ class _AuxMeter:
 
 def _compress_with_policy(spec: dict, messages) -> tuple:
     """Run one policy; returns (compressed, compressor, compaction-cost dict)."""
+    if spec.get("engine") == "pxpipe":
+        from evals.compaction import pxpipe_arm
+
+        blocked = pxpipe_arm.require_renderer()
+        if blocked:
+            raise RuntimeError(f"pxpipe arm unavailable: {blocked}")
+        work = Path(spec.get("_work_dir") or pxpipe_arm.temp_work_dir())
+        compressed, comp, cost = pxpipe_arm.build_arm(spec, messages, work, model=EVAL_MODEL)
+        spec["_work_dir"] = str(work)
+        return compressed, comp, cost
+
     if spec.get("engine") == "jev":
         from evals.compaction.jev_arm import JevCompactor, JevOptions
 
@@ -355,6 +378,13 @@ def run_policy(name: str, spec: dict, messages, questions, out_dir: Path,
     ]
 
     context_text = serialize_for_exam(compressed, char_cap=700_000)
+    from evals.compaction import pxpipe_arm
+
+    media = list(compaction_cost.pop("media", []) or [])
+    image_tokens = int(compaction_cost.pop("_image_tokens", 0) or 0)
+    reader_provider = reader_model = ""
+    if media:
+        reader_provider, _, reader_model = str(compaction_cost.get("arm_reader", "")).partition("/")
     results = []
     for qa in questions:
         if with_recovery:
@@ -381,6 +411,15 @@ def run_policy(name: str, spec: dict, messages, questions, out_dir: Path,
         else:
             query = None
             answer = _call(ANSWER_PROMPT.format(context=context_text, question=qa["q"]), max_tokens=400)
+        if media:
+            # The collapsed region is pixels, not text: same question, same stub
+            # context (head + tail), the pages attached after it.
+            answer = pxpipe_arm.call_vision(
+                pxpipe_arm.ANSWER_NOTE
+                + ANSWER_PROMPT.format(context=context_text, question=qa["q"]),
+                media, reader_provider, reader_model,
+                usage_sink=pxpipe_arm.USAGE, max_tokens=400,
+            )
         verdict_raw = _call(JUDGE_PROMPT.format(question=qa["q"], gold=qa["gold"], answer=answer), max_tokens=300)
         try:
             verdict = _extract_json(verdict_raw)
@@ -395,7 +434,9 @@ def run_policy(name: str, spec: dict, messages, questions, out_dir: Path,
     summary = {
         "policy": label,
         "before_tokens": total_tokens(before),
-        "after_tokens": total_tokens(compressed),
+        "after_tokens": total_tokens(compressed) + image_tokens,
+        "after_text_tokens": total_tokens(compressed),
+        "after_image_tokens": image_tokens,
         "after_msgs": len(compressed),
         "compress_seconds": round(elapsed, 1),
         "recall_pct": round(100 * sum(scored) / (2 * len(scored)), 1) if scored else 0.0,

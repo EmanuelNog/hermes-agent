@@ -76,6 +76,15 @@ POLICIES: dict[str, dict[str, Any]] = {
         "engine": "jev",
         "jev": {"select": "recency", "result_budget_tokens": 60_000},
     },
+    # pxpipe (evals/compaction/pxpipe_arm.py): the collapsed middle region is NOT
+    # summarized -- it is rendered to dense PNG pages by pxpipe's own renderer and
+    # read through the vision channel; head and protected tail stay verbatim, so
+    # the only variable against `current` is summary-text vs pixels.
+    # Needs a pxpipe checkout (PXPPIPE_DIR) and a vision-capable reader model.
+    "pxpipe": {
+        "engine": "pxpipe",
+        "pxpipe": {"max_pages": 24},
+    },
 }
 
 

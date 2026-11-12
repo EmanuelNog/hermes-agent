@@ -81,6 +81,36 @@ pinned tail, state/request ceilings). When the fitted state cannot get under
 the 25K-token ceiling the arm records `jev_fallback` (the plugin throws and
 Claude Code falls back to its built-in summary) instead of scoring.
 
+A policy with `"engine": "pxpipe"` bypasses the summarizer too, but for the
+opposite reason. [pxpipe](https://github.com/teamchong/pxpipe) (MIT) re-prices
+the collapsed region instead of shrinking it: the raw text of the region is
+rendered by pxpipe's own renderer into dense PNG pages (5×8 Spleen glyph cells,
+reflowed, ~28K chars/page at 1568 px) and read through the model's vision
+channel, where an image costs tokens by pixel area rather than by how much text
+it carries. Head and protected tail stay verbatim, so against `current` the only
+variable is summary text vs pixels of the same span.
+
+Nothing of pxpipe is vendored here. `pxpipe_arm.py` shells out to
+`pxpipe_render.mjs`, which imports `renderDensePages` from a checkout of the
+upstream repo (`PXPPIPE_DIR`, default `~/Projects/spikes/pxpipe`) through `tsx`:
+
+```bash
+git clone https://github.com/teamchong/pxpipe.git ~/Projects/spikes/pxpipe
+python evals/compaction/runner.py --transcript lineage.json --cap-tokens 200000 \
+    --questions 15 --policies current,pxpipe --out results/pxpipe-run
+```
+
+The arm charges its pages into `after_tokens` (`after_text_tokens` +
+`after_image_tokens`, the Anthropic 28-px patch count pxpipe itself reports), so
+an image arm cannot look free. It needs a vision-capable reader:
+`PXPIPE_ARM_PROVIDER` / `PXPIPE_ARM_MODEL` default to `nous` /
+`google/gemini-4-argon`, pxpipe's own best dense-page reader. Reader-model
+choice is a confound, not a detail — `EVAL_ANSWER_PROVIDER` / `EVAL_ANSWER_MODEL`
+override the route for EVERY arm (answers and judge), so run a paired
+`current` vs `pxpipe` under one reader before drawing any conclusion.
+`max_pages` bounds request size only; pages past the cap are not sent and
+`coverage_pct` records the share of the region the arm was actually given.
+
 Every arm's result carries its compaction spend: `compaction_calls`,
 `compaction_input_tokens` / `compaction_output_tokens`, `compaction_model`
 and `compaction_cost_usd` (Jev reports cost directly; summary calls are

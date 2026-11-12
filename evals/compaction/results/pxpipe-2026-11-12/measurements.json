@@ -1,0 +1,27 @@
+{
+ "note": "pxpipe arm, deterministic side only (no LLM calls): render geometry and token accounting. Transcripts are real state.db lineages, never committed. Measured 2026-11-12 on pc1.",
+ "renderer": "pxpipe checkout @ teamchong/pxpipe main, renderDensePages(reflow=true), production dense style (Spleen 5x8, 1568px wide)",
+ "image_token_metric": "Anthropic 28-px patch count, ceil(w/28)*ceil(h/28) per page (pxpipe's own reported metric)",
+ "text_token_metric": "harness convention, 4 chars/token",
+ "runs": [
+  {"transcript": "gist (Review gist file, 2 sessions)", "cap_tokens": 200000, "region_rows": 207,
+   "region_chars": 590167, "region_text_tokens": 147541, "pages": 22, "image_tokens": 31136,
+   "chars_per_image_token": 19.0, "saving_vs_text_pct": 78.9,
+   "after_tokens_total": 78826, "after_text_tokens": 47690, "dropped_glyphs": 4},
+  {"transcript": "gist (Review gist file, 2 sessions)", "cap_tokens": 500000, "region_rows": 626,
+   "region_chars": 1681961, "region_text_tokens": 420490, "pages": 61, "image_tokens": 88480,
+   "chars_per_image_token": 19.0, "saving_vs_text_pct": 79.0,
+   "after_tokens_total": 141380, "after_text_tokens": 52900, "dropped_glyphs": 12},
+  {"transcript": "pc2 (Set up Linux server on second PC, 5 sessions)", "cap_tokens": 200000,
+   "region_rows": 227, "region_chars": 590956, "region_text_tokens": 147739, "pages": 22,
+   "image_tokens": 31360, "chars_per_image_token": 18.8, "saving_vs_text_pct": 78.8,
+   "after_tokens_total": 74811, "after_text_tokens": 43451, "dropped_glyphs": 489},
+  {"transcript": "pc2 (Set up Linux server on second PC, 5 sessions)", "cap_tokens": 500000,
+   "region_rows": 861, "region_chars": 1719272, "region_text_tokens": 429818, "pages": 63,
+   "image_tokens": 91168, "chars_per_image_token": 18.9, "saving_vs_text_pct": 78.8,
+   "after_tokens_total": 135183, "after_text_tokens": 44015, "dropped_glyphs": 490}
+ ],
+ "dropped_glyph_detail": "gist: U+FE0F variation selector x4. pc2: 489 chars, 96% of them C1 control bytes U+0080-U+009C (latin-1 mojibake in that session's tool output). No identifier characters are dropped at this density.",
+ "summary_arm_reference": {"policy": "current", "transcript": "gist", "cap_tokens": 200000,
+  "after_tokens": 51068, "recall_pct": 93.3, "reader": "text reader, route fell back under provider load (see scorecard caveat)"}
+}
