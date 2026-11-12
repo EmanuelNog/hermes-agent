@@ -142,7 +142,7 @@ export interface PasteSection {
 
 export interface Msg {
   info?: SessionInfo
-  kind?: 'diff' | 'event' | 'image' | 'intro' | 'panel' | 'slash' | 'trail'
+  kind?: 'diff' | 'event' | 'image' | 'intro' | 'panel' | 'recall' | 'slash' | 'trail'
   // Local image paths shown inline under the row: a user turn's attachments,
   // or (kind 'image') the picture a tool call produced or looked at.
   images?: string[]

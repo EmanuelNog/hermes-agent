@@ -1101,7 +1101,10 @@ def _memory_turn_start_and_prefetch(
         with suppress(Exception):
             _recall_indicator = agent._memory_manager.describe_recall()
             if _recall_indicator:
-                agent._emit_status(_recall_indicator)
+                # Its own kind, not the generic lifecycle rail: surfaces render by kind, and the
+                # TUI files lifecycle lines as ambient activity (hidden by default) — the hint
+                # never reached the user there. ``recall`` lets a surface print a durable line.
+                agent._emit_status_kind("recall", _recall_indicator, origin="recall_indicator")
     return ext_prefetch_cache
 
 

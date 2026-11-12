@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest'
 
-import { shouldShowResponseSeparator, shouldShowThinkingTrail } from '../components/messageLine.js'
+import {
+  isCollapsibleSystemMessage,
+  shouldShowResponseSeparator,
+  shouldShowThinkingTrail
+} from '../components/messageLine.js'
+
+describe('isCollapsibleSystemMessage', () => {
+  it('collapses a long dump the user did not ask to read (system prompt, AGENTS.md)', () => {
+    expect(isCollapsibleSystemMessage({ role: 'system', text: 'x'.repeat(700) })).toBe(true)
+    expect(isCollapsibleSystemMessage({ role: 'system', text: 'short' })).toBe(false)
+    expect(isCollapsibleSystemMessage({ role: 'assistant', text: 'x'.repeat(700) })).toBe(false)
+  })
+
+  it('never collapses a recall hint: the crops ARE the hint', () => {
+    const hint = '💡 Prior Context Hint · 5 shown of 12 in 56ms\n  ' + 'crop row\n  '.repeat(60)
+
+    expect(isCollapsibleSystemMessage({ role: 'system', kind: 'recall', text: hint })).toBe(false)
+  })
+})
 
 describe('shouldShowResponseSeparator', () => {
   it('separates assistant response text from visible details', () => {

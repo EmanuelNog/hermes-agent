@@ -430,6 +430,19 @@ describe('createGatewayEventHandler', () => {
     expect(getUiState().compacting).toBe(true)
   })
 
+  it('prints a recall hint into the transcript instead of hiding it in activity', () => {
+    // The activity section defaults to hidden, so a hint pushed there never reached the user.
+    const appended: Msg[] = []
+    const ctx = buildCtx(appended)
+    const onEvent = createGatewayEventHandler(ctx)
+    const hint = '💡 Prior Context Hint · 2 shown of 12 in 66ms\n  the hint system is not showing in the tui'
+
+    onEvent({ payload: { kind: 'recall', text: hint }, type: 'status.update' } as any)
+
+    expect(appended).toContainEqual({ kind: 'recall', role: 'system', text: hint })
+    expect(getTurnState().activity).toHaveLength(0)
+  })
+
   it('keeps auto-compaction status visible until compaction finishes (#97239)', () => {
     const ctx = buildCtx([])
     const onEvent = createGatewayEventHandler(ctx)

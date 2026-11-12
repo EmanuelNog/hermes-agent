@@ -103,8 +103,9 @@ def _stored_transcript_kwargs(agent) -> dict[str, Any]:
 
 
 def _memory_provider_init_kwargs(agent, platform) -> dict[str, Any]:
-    """Scoping kwargs for ``MemoryManager.initialize_all`` (status_callback is CLI-only:
-    gateway status travels a different path and the indicator no-ops without it)."""
+    """Scoping kwargs for ``MemoryManager.initialize_all`` (the status sink is CLI-shaped on the
+    CLI and on the TUI — one message argument, TUI carriers tagged ``recall`` — and absent on the
+    gateway, whose status travels a different path)."""
     kwargs = {
         "session_id": agent.session_id,
         "platform": platform or "cli",
@@ -120,6 +121,13 @@ def _memory_provider_init_kwargs(agent, platform) -> dict[str, Any]:
     if kwargs["platform"] == "cli":
         kwargs["warning_callback"] = agent._emit_warning
         kwargs["status_callback"] = agent._emit_status
+    elif kwargs["platform"] == "tui":
+        # Same one-argument sink the CLI hands providers, carried on the ``recall`` kind: the TUI
+        # renders that as a durable transcript line, while a provider's line on the generic
+        # lifecycle rail is filed as ambient activity (hidden by default) and never reaches the
+        # user. No warning_callback here — the TUI has its own notice spine.
+        kwargs["status_callback"] = lambda message: agent._emit_status_kind(
+            "recall", message, origin="memory_provider")
     kwargs.update(_stored_transcript_kwargs(agent))
     # Session title (e.g. honcho derives chat-scoped session keys from it).
     if agent._session_db:

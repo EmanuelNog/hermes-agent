@@ -615,9 +615,14 @@ def test_pending_cli_message_uses_clean_override_for_api_local_note():
 
 
 def test_recall_indicator_emitted_when_memory_injected():
-    """When prefetch injects memory, the deterministic indicator is emitted."""
+    """When prefetch injects memory, the deterministic indicator is emitted on its own kind.
+
+    ``recall`` (not ``lifecycle``) is what lets a surface print the hint as a durable line: the
+    TUI files lifecycle text as ambient activity and hides that section by default.
+    """
     agent = _FakeAgent()
     agent._emit_status = MagicMock()
+    agent._emit_status_kind = MagicMock()
     mm = MagicMock()
     mm.prefetch_all.return_value = "- recalled fact"
     mm.describe_recall.return_value = "👁️ Hindsight — recalled 2 memories"
@@ -627,7 +632,9 @@ def test_recall_indicator_emitted_when_memory_injected():
     # entirely, so there'd be nothing to indicate. See is_trivial_prompt.
     _build(agent, user_message="what did we decide about the deploy pipeline?")
 
-    agent._emit_status.assert_any_call("👁️ Hindsight — recalled 2 memories")
+    assert ("recall", "👁️ Hindsight — recalled 2 memories") in [
+        call.args[:2] for call in agent._emit_status_kind.call_args_list
+    ]
 
 
 def test_recall_indicator_skipped_when_nothing_injected():

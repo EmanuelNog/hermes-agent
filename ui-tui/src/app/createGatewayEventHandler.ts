@@ -1321,6 +1321,16 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
         setStatus(p.text)
 
+        if (p.kind === 'recall') {
+          // A recall hint is durable context, not ambient meta: the activity section is hidden by
+          // default, so filing it there (the lifecycle path below) showed the user nothing. Its own
+          // msg kind also keeps the crop rows out of the long-system-message collapse.
+          ctx.transcript.appendMessage({ kind: 'recall', role: 'system', text: p.text })
+          restoreStatusAfter(4000)
+
+          return
+        }
+
         if (p.kind === 'compressing' || p.kind === 'compacting') {
           sys(p.text)
           turnController.clearStatusTimer()

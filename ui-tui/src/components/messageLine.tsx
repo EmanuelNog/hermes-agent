@@ -26,6 +26,13 @@ import { TodoPanel } from './todoPanel.js'
 // Collapse threshold for long system messages (system prompt etc.)
 const SYSTEM_COLLAPSE_CHARS = 400
 
+/**
+ * Long system text is collapsed behind a caret — except a recall hint, where the crop rows ARE
+ * the hint and a caret would hide the only part the user came to read.
+ */
+export const isCollapsibleSystemMessage = (msg: Pick<Msg, 'kind' | 'role' | 'text'>): boolean =>
+  msg.role === 'system' && msg.kind !== 'recall' && msg.text.length > SYSTEM_COLLAPSE_CHARS
+
 // `display.timestamps` label — same HH:MM shape the classic CLI's default
 // `display.timestamp_format` ("%H:%M") produces on its message labels, so
 // one config key reads identically across surfaces (#41531).
@@ -85,7 +92,7 @@ export const MessageLine = memo(function MessageLine({
   const leadGap = hasLeadGap(prev, msg)
 
   // Collapse toggle for long system messages
-  const systemIsLong = msg.role === 'system' && msg.text.length > SYSTEM_COLLAPSE_CHARS
+  const systemIsLong = isCollapsibleSystemMessage(msg)
   const [systemOpen, setSystemOpen] = useState(false)
 
   if (msg.kind === 'trail' && msg.todos?.length) {
