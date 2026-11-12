@@ -890,6 +890,10 @@ DEFAULT_CONFIG = {
         "language": "en",
         # TUI busy indicator: kaomoji | emoji | unicode (braille) | ascii. `/indicator <style>`.
         "tui_status_indicator": "kaomoji",
+        # TUI wheel rows per notch BEFORE acceleration (1-20). 1 is the smooth default; raise it on
+        # a slow mouse or a low-notches-per-turn trackpad. Applied live from config; an explicit
+        # HERMES_TUI_SCROLL_SPEED (or CLAUDE_CODE_SCROLL_SPEED) in the launch env still wins.
+        "tui_scroll_speed": 1,
         # Seconds between idle prompt_toolkit redraws in the classic CLI; keeps wall-clock
         # status-bar read-outs ticking and the bottom chrome from going stale. 0 disables it if it
         # fights terminal auto-scroll in non-fullscreen mode.

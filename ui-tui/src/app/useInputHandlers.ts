@@ -10,7 +10,7 @@ import { DOUBLE_ESC_MS, TYPING_IDLE_MS } from '../config/timing.js'
 import { t } from '../i18n/runtime.js'
 import { isAction, isCopyShortcut, isMac, isMacActionFallback, isVoiceToggleKey } from '../lib/platform.js'
 import { computePrecisionWheelStep, initPrecisionWheel } from '../lib/precisionWheel.js'
-import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
+import { computeWheelStep, initWheelAccelForHost, syncScrollSpeedBase } from '../lib/wheelAccel.js'
 import { closeWidget, dispatchWidgetInput } from '../sdk/host.js'
 
 import { $agentDockCollapsed } from './agentRoster.js'
@@ -815,6 +815,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
       }
 
       // 0 = direction-flip bounce deferred; skip the no-op scroll.
+      syncScrollSpeedBase(wheelAccelRef.current)
       const rows = computeWheelStep(wheelAccelRef.current, dir, now)
 
       return rows ? scrollTranscript(dir * rows * wheelStep) : undefined

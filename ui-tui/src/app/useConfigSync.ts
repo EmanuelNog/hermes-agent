@@ -8,6 +8,7 @@ import { syncTuiLocale } from '../i18n/loader.js'
 import { t } from '../i18n/runtime.js'
 import { DEFAULT_VOICE_RECORD_KEY, type ParsedVoiceRecordKey, parseVoiceRecordKey } from '../lib/platform.js'
 import { asRpcResult } from '../lib/rpc.js'
+import { setScrollSpeedBase } from '../lib/wheelAccel.js'
 
 import { applyConfiguredTuiTheme } from './createGatewayEventHandler.js'
 import {
@@ -330,6 +331,10 @@ export const applyDisplay = (
   setBell(!!d.bell_on_complete)
 
   setBellOnPrompt?.(!!d.bell_on_prompt)
+
+  // Rows per wheel notch before acceleration (`display.tui_scroll_speed`); a config edit reaches the
+  // live accel state on the next wheel event.
+  setScrollSpeedBase(d.tui_scroll_speed)
 
   applyConfiguredTuiTheme(d.tui_theme)
 

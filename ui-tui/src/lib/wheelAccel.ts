@@ -72,8 +72,49 @@ export function readScrollSpeedBase(): number {
   return Number.isFinite(n) && n > 0 ? Math.min(n, 20) : 1
 }
 
+// ── display.tui_scroll_speed (persisted config; env stays the operator override) ──
+//
+// The TUI receives `display.*` from the gateway on every config change, so this is
+// module-level state rather than a constructor argument: the wheel handler owns one
+// long-lived accel state, and a config edit must reach it without a restart.
+let configuredBase: number | null = null
+
+const clampSpeed = (n: number) => Math.min(n, 20)
+
+/** `display.tui_scroll_speed` — rows per notch before acceleration. `null`/invalid clears it. */
+export function setScrollSpeedBase(raw: unknown): void {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? parseFloat(raw) : Number.NaN
+
+  configuredBase = Number.isFinite(n) && n > 0 ? clampSpeed(n) : null
+}
+
+/** Effective base: an explicit env override wins, then the config value, then 1. */
+export function currentScrollSpeedBase(): number {
+  const env = process.env.HERMES_TUI_SCROLL_SPEED ?? process.env.CLAUDE_CODE_SCROLL_SPEED
+
+  if (env !== undefined && env.trim() !== '') {
+    return readScrollSpeedBase()
+  }
+
+  return configuredBase ?? 1
+}
+
+/** Adopt a config change on a live accel state (called before each wheel step). */
+export function syncScrollSpeedBase(state: WheelAccelState): void {
+  const live = currentScrollSpeedBase()
+
+  if (live !== state.base) {
+    state.base = live
+
+    // Never leave momentum above the new ceiling; a raised floor takes effect at once.
+    if (!state.wheelMode && state.mult < live) {
+      state.mult = live
+    }
+  }
+}
+
 export function initWheelAccelForHost(): WheelAccelState {
-  return initWheelAccel(isXtermJs(), readScrollSpeedBase())
+  return initWheelAccel(isXtermJs(), currentScrollSpeedBase())
 }
 
 /** Compute rows for one wheel event, mutating `state`. Returns 0 when a

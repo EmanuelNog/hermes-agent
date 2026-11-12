@@ -11,10 +11,12 @@ import {
   normalizeStatusBar,
   syncMcpReload
 } from '../app/useConfigSync.js'
+import { currentScrollSpeedBase, setScrollSpeedBase } from '../lib/wheelAccel.js'
 
 describe('applyDisplay', () => {
   beforeEach(() => {
     resetUiState()
+    setScrollSpeedBase(null)
   })
 
   it('fans every display flag out to $uiState and the bell callback', () => {
@@ -93,6 +95,19 @@ describe('applyDisplay', () => {
     applyDisplay(null, setBell)
 
     expect($uiState.get().destructiveSlashConfirm).toBe(false)
+  })
+
+  it('carries display.tui_scroll_speed into the wheel base', () => {
+    const setBell = vi.fn()
+
+    applyDisplay({ config: { display: { tui_scroll_speed: 4 } } }, setBell)
+
+    expect(currentScrollSpeedBase()).toBe(4)
+
+    // A later config without the key must not leave the raised base stuck on.
+    applyDisplay({ config: { display: {} } }, setBell)
+
+    expect(currentScrollSpeedBase()).toBe(1)
   })
 
   it('applies v1 parity defaults when display fields are missing', () => {

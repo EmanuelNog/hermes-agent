@@ -179,6 +179,9 @@ export interface ConfigDisplayConfig {
   // narrowing-and-autocomplete contract on a value that requires runtime
   // validation anyway.
   tui_status_indicator?: string
+  /** Rows per wheel notch before acceleration (1-20). Runtime-validated: the
+   *  base is a number, but raw YAML may hand over a string or nonsense. */
+  tui_scroll_speed?: number | string
   tui_statusbar?: 'bottom' | 'off' | 'on' | 'top' | boolean
   /** Theme mode pin: 'light' / 'dark' beat background auto-detection; 'auto'
    *  (default) trusts the OSC-11 probe + env signals. */

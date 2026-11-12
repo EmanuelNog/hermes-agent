@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
-import { computeWheelStep, initWheelAccel } from '../lib/wheelAccel.js'
+import {
+  computeWheelStep,
+  currentScrollSpeedBase,
+  initWheelAccel,
+  setScrollSpeedBase,
+  syncScrollSpeedBase
+} from '../lib/wheelAccel.js'
 
 describe('wheelAccel — native path', () => {
   it('first click after init returns base', () => {
@@ -69,6 +75,56 @@ describe('wheelAccel — native path', () => {
     computeWheelStep(s, 1, 3000)
 
     expect(s.wheelMode).toBe(false)
+  })
+})
+
+describe('wheelAccel — scroll speed knobs', () => {
+  afterEach(() => {
+    // Module-level configured base is shared state: never leak into another file.
+    setScrollSpeedBase(null)
+    delete process.env.HERMES_TUI_SCROLL_SPEED
+    delete process.env.CLAUDE_CODE_SCROLL_SPEED
+  })
+
+  it('display.tui_scroll_speed raises rows per notch', () => {
+    const s = initWheelAccel(false, 1)
+
+    setScrollSpeedBase(3)
+    syncScrollSpeedBase(s)
+
+    expect(computeWheelStep(s, 1, 1000)).toBe(3)
+  })
+
+  it('an env override still wins over the config value', () => {
+    process.env.HERMES_TUI_SCROLL_SPEED = '7'
+    setScrollSpeedBase(3)
+
+    expect(currentScrollSpeedBase()).toBe(7)
+  })
+
+  it('invalid and out-of-range values are ignored or clamped', () => {
+    setScrollSpeedBase('fast')
+
+    expect(currentScrollSpeedBase()).toBe(1)
+
+    setScrollSpeedBase(0)
+
+    expect(currentScrollSpeedBase()).toBe(1)
+
+    setScrollSpeedBase(999)
+
+    expect(currentScrollSpeedBase()).toBe(20)
+  })
+
+  it('a live change reaches a state that already scrolled', () => {
+    const s = initWheelAccel(false, 1)
+
+    computeWheelStep(s, 1, 1000)
+    setScrollSpeedBase(4)
+    syncScrollSpeedBase(s)
+
+    // Same direction, 20ms apart: accel ramps on top of the new floor, never below it.
+    expect(computeWheelStep(s, 1, 1010)).toBeGreaterThanOrEqual(4)
   })
 })
 
