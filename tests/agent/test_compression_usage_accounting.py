@@ -76,7 +76,7 @@ def test_out_of_turn_summary_records_compression_usage(db):
     compressor.bind_session_state(db, "s1")
     resolve, cached, cfg = _aux_route()
     with resolve, cached, cfg:
-        out = compressor._call_summary_llm("summarize this", 0.0)
+        out = compressor._call_summary_llm([{"role": "user", "content": "summarize this"}], 0.0)
 
     assert out and "SUMMARY" in out
     rows = _compression_rows(db, "s1")
@@ -95,7 +95,7 @@ def test_out_of_turn_summary_on_main_model_fallback_records_compression_usage(db
                                                 failed_model="summary-model")
     resolve, cached, cfg = _aux_route()
     with resolve, cached, cfg:
-        out = compressor._call_summary_llm("summarize this", 0.0)
+        out = compressor._call_summary_llm([{"role": "user", "content": "summarize this"}], 0.0)
 
     assert out
     rows = _compression_rows(db, "s1")
@@ -130,7 +130,7 @@ def test_turn_context_wins_over_the_compressor_binding(db):
     try:
         resolve, cached, cfg = _aux_route()
         with resolve, cached, cfg:
-            assert compressor._call_summary_llm("summarize this", 0.0)
+            assert compressor._call_summary_llm([{"role": "user", "content": "summarize this"}], 0.0)
     finally:
         reset_accounting_context(token)
 
