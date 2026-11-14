@@ -21,10 +21,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from agent.compaction_text import _redact_compaction_text
 from agent.context_compressor import (
     ContextCompressor,
     SUMMARY_PREFIX,
-    _redact_compaction_text,
 )
 
 SECRET = "sk-proj-" + ("a" * 40)

@@ -44,6 +44,13 @@ _ONESHOT_INSTRUCTIONS = (
 _ROLE_LABELS = {"user": "USER", "assistant": "ASSISTANT", "tool": "TOOL RESULT"}
 
 
+def _neutralize_summary_role_labels(text: str) -> str:
+    """Escape a role label embedded in content (imported lazily: the compressor imports heavily)."""
+    from agent.compaction_text import neutralize_summary_role_labels
+
+    return neutralize_summary_role_labels(text)
+
+
 def trim_snapshot_for_fork(history: Optional[list[dict[str, Any]]]) -> list[dict[str, Any]]:
     """Drop trailing messages until the snapshot ends with a completed assistant text.
 
@@ -73,7 +80,7 @@ def render_history_for_side_question(history: Optional[list[dict[str, Any]]], ch
             lines.append(f"ASSISTANT [called tools: {', '.join(names)}]")
         label = _ROLE_LABELS.get(role)
         if label and text:
-            lines.append(f"{label}: {text[:_PER_MESSAGE_CHAR_CAP]}")
+            lines.append(f"{label}: {_neutralize_summary_role_labels(text[:_PER_MESSAGE_CHAR_CAP])}")
 
     kept: list[str] = []
     used = 0
