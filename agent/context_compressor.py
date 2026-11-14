@@ -3415,12 +3415,15 @@ class ContextCompressor(
                 content = "\n".join(_summary_part_text(part) for part in content if isinstance(part, (dict, str)))
             content = _redact_compaction_text(content or "")
             content = _MEDIA_DIRECTIVE_RE.sub("[media attachment]", content)
-            content = neutralize_summary_role_labels(content)
             # Strip inline <think>-style blocks: scratch work wastes summarizer context and risks being kept as fact.
             if role == "assistant" and content:
                 content = strip_think_blocks(None, content)
             if len(content) > self._CONTENT_MAX:
                 content = elide_middle(content, self._CONTENT_HEAD, self._CONTENT_TAIL)
+            # Neutralize LAST: a cut landing on an escaped label leaves its backslash in the
+            # dropped region and the tail window then opens a line with a live boundary, so
+            # every trim above must have already happened when the escape is applied.
+            content = neutralize_summary_role_labels(content)
             if role == "tool":
                 parts.append(f"[TOOL RESULT {msg.get('tool_call_id', '')}]: {content}")
                 continue
@@ -3581,27 +3584,6 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             if heading not in summary:
                 summary += build()
         return summary
-
-    @classmethod
-    def _bound_summary_input(cls, content: str) -> str:
-        """Cap total summarizer input, keeping head and tail and marking the omitted middle."""
-        if len(content) <= cls._SUMMARY_INPUT_MAX_CHARS:
-            return content
-
-        marker_template = (
-            "\n\n...[summary input truncated: omitted "
-            "{omitted:,} chars from the middle to keep compression prompt bounded]...\n\n"
-        )
-        # Marker width can change with the omitted count; estimate, then rebuild once.
-        omitted = len(content)
-        for _ in range(2):
-            marker = marker_template.format(omitted=omitted)
-            remaining = max(cls._SUMMARY_INPUT_MAX_CHARS - len(marker), 0)
-            head_chars = int(remaining * 0.45)
-            tail_chars = remaining - head_chars
-            omitted = max(len(content) - head_chars - tail_chars, 0)
-        tail = content[-tail_chars:].lstrip() if tail_chars else ""
-        return content[:head_chars].rstrip() + marker + tail
 
     # Lean-mode sampling slice count: 8 keeps slices ~20K chars at the 160K cap.
     _SAMPLED_INPUT_SLICES = 8
