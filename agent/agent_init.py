@@ -1395,13 +1395,6 @@ def _parse_compression_config(agent, _agent_cfg) -> CompressionSettings:
     # Opt-in idle compaction: compact up front when a session resumes after this many
     # seconds idle (0 = disabled). Consumed by build_turn_context().
     idle_compact_after_seconds = max(0, int(cfg.get("idle_compact_after_seconds", 0)))
-    # prefetch_margin: fraction of the context WINDOW subtracted from the blocking
-    # threshold; when prompt tokens reach threshold - margin*context the summary
-    # worker is armed WITHOUT blocking the loop. 0 = disabled (current behavior).
-    try:
-        prefetch_margin = max(0.0, float(cfg.get("prefetch_margin", 0.0)))
-    except (TypeError, ValueError):
-        prefetch_margin = 0.0
     return CompressionSettings(
         threshold=threshold,
         autoraise_notice_enabled=autoraise_notice_enabled,
@@ -1449,7 +1442,6 @@ def _parse_compression_config(agent, _agent_cfg) -> CompressionSettings:
         codex_responses_native=responses_native,
         codex_responses_compact_threshold=compact_threshold,
         idle_compact_after_seconds=idle_compact_after_seconds,
-        prefetch_margin=prefetch_margin,
         prepare_ahead=is_truthy_value(cfg.get("prepare_ahead"), default=False),
     )
 
@@ -1874,7 +1866,6 @@ def _build_context_engine(agent, _agent_cfg, cs, _custom_providers, _effective_c
             _bind_session_state(session_db=session_db, session_id=agent.session_id)
     agent.compression_enabled = cs.enabled
     agent.compression_in_place = cs.in_place
-    agent.compression_prefetch_margin = cs.prefetch_margin
     _cc = agent.context_compressor
     # Micro-compaction has no pre-compress checkpoint hook; suppress it while the gate is
     # armed (mirrors native_compaction.py).

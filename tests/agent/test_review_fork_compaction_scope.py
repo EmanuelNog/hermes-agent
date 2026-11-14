@@ -221,15 +221,3 @@ def test_detach_marks_the_fork():
     _detach_fork_compression(fork)
 
     assert fork._background_review_fork is True
-
-
-def test_prefetch_never_arms_on_a_review_fork(agent):
-    """The async prefetch worker only pays off for a session that outlives the summary."""
-    from agent.turn_prefetch_compaction import can_prefetch
-
-    _as_review_fork(agent, 480_000)
-
-    ok, reason = can_prefetch(agent, [{"role": "user", "content": "x"}], 480_000)
-
-    assert ok is False
-    assert reason == "review_fork"

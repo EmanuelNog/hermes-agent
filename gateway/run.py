@@ -36,7 +36,6 @@ from agent.conversation_compression import (
     COMPACTION_DONE_STATUS, COMPACTION_HEARTBEAT_STATUS, COMPACTION_STATUS, COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE,
     COMPRESSION_REFUSED_WOULD_GROW_WARNING, COMPRESSION_RETRY_MESSAGES_STATUS_TEMPLATE, COMPRESSION_RETRY_TOKENS_STATUS_TEMPLATE,
     COMPRESSION_RETRY_TOO_LARGE_STATUS_TEMPLATE, IDLE_COMPACTION_STATUS_TEMPLATE,
-    PREFETCH_COMPACTION_DONE_STATUS_TEMPLATE, PREFETCH_COMPACTION_STATUS_TEMPLATE,
     PRE_API_COMPRESSION_STATUS_TEMPLATE, PREFLIGHT_COMPRESSION_STATUS_TEMPLATE)
 from gateway.run_status_filter import EMPTY_LADDER_STATUS_PATTERN, _status_template_to_regex, hidden_outside_dm, is_terminal_failure_status
 from agent.conversation_compression_archive import MERGED_DURABLE_ROWS, RETIRED_DURABLE_ROWS, UNNAMED_DURABLE_ROWS
@@ -106,12 +105,6 @@ _TELEGRAM_NOISY_STATUS_RE = re.compile(
     r"|stream\s+(?:drop|drop\s+mid\s+tool-call).+retry\s+\d"
     r"|stale\s+connections\s+from\s+a\s+previous\s+provider\s+issue"
     rf"|{re.escape(COMPACTION_DONE_STATUS)}|{re.escape(COMPRESSION_REFUSED_WOULD_GROW_WARNING)}"
-    # Prefetch compaction (background) routine lifecycle — same treatment as the blocking siblings above.
-    # Handcrafted here (not via _status_template_to_regex, which is defined below this regex) — keep in
-    # sync with PREFETCH_COMPACTION_*_TEMPLATE; the drift pin is
-    # tests/agent/test_prefetch_upstream_compat.py::test_gateway_noise_classification_contract.
-    r"|compacting\s+context\s+\(prefetch\)\s+[—-]\s+summarizing"
-    r"|prefetch\s+compaction\s+complete\s+[—-]\s+\d[\d,]*\s+(?:→|->)\s+\d[\d,]*\s+messages\s+in\s+\d+s"
     r")",
     re.IGNORECASE | re.DOTALL)
 
@@ -338,8 +331,7 @@ _COMPRESSION_PROGRESS_STATUS_RE = re.compile(
             PREFLIGHT_COMPRESSION_STATUS_TEMPLATE, IDLE_COMPACTION_STATUS_TEMPLATE,
             COMPRESSION_RETRY_TOO_LARGE_STATUS_TEMPLATE, COMPRESSION_RETRY_MESSAGES_STATUS_TEMPLATE,
             COMPRESSION_RETRY_TOKENS_STATUS_TEMPLATE,
-            COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE,
-            PREFETCH_COMPACTION_STATUS_TEMPLATE, PREFETCH_COMPACTION_DONE_STATUS_TEMPLATE)),
+            COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE)),
     re.IGNORECASE)
 
 

@@ -88,15 +88,6 @@ COMPACTION_DONE_STATUS = "✓ Context compaction complete — continuing turn...
 # compression.progress_notices), the FAILURE line is a failure-class notice and
 # must stay visible. Keep {placeholders} numeric-only: the gateway derives
 # suppression regexes from these templates via _status_template_to_regex.
-PREFETCH_COMPACTION_STATUS_TEMPLATE = (
-    "🗜️ Compacting context (prefetch) — summarizing ~{tokens:,} tokens in the background so I can keep working..."
-)
-PREFETCH_COMPACTION_DONE_STATUS_TEMPLATE = (
-    "✓ Prefetch compaction complete — {before} → {after} messages in {seconds}s, continuing..."
-)
-PREFETCH_COMPACTION_FAILED_TEMPLATE = (
-    "⚠ Prefetch compaction failed after {seconds}s ({reason}) — continuing without it."
-)
 
 
 def _strip_marker_for_comparison(msgs: Any) -> Any:
@@ -163,8 +154,6 @@ ROUTINE_COMPRESSION_STATUS_SAMPLES = (
     COMPRESSION_RETRY_MESSAGES_STATUS_TEMPLATE.format(before=30, after=12),
     COMPRESSION_RETRY_TOKENS_STATUS_TEMPLATE.format(before=250000, after=120000),
     COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE.format(new_ctx=120000, old_ctx=250000),
-    PREFETCH_COMPACTION_STATUS_TEMPLATE.format(tokens=120000),
-    PREFETCH_COMPACTION_DONE_STATUS_TEMPLATE.format(before=30, after=12, seconds=42),
 )
 
 
@@ -172,16 +161,6 @@ def is_compaction_progress_status(text: object) -> bool:
     """True for a status its producer marked as compaction in progress; gateways re-tag it ``kind="compacting"``.
     Decided by the mark, never the wording: warnings and failure notices mention compression too."""
     return isinstance(text, CompactionProgressText) and bool(text.strip())
-
-
-def prefetch_start_status(tokens: int) -> CompactionProgressText:
-    """The prefetch start line, MARKED as compaction progress.
-
-    Upstream classifies progress by the object mark (``CompactionProgressText``), not by wording, so a
-    plain ``template.format(...)`` reaches chat surfaces untagged. The done line stays unmarked on
-    purpose: only the start is progress, the completion is a terminal status.
-    """
-    return CompactionProgressText(PREFETCH_COMPACTION_STATUS_TEMPLATE.format(tokens=max(0, int(tokens))))
 
 
 def compaction_status_kind(kind: str, text: object) -> str:
@@ -3958,13 +3937,9 @@ def _refresh_main_credential(agent: Any) -> None:
 
 
 def _announce_compression_start(
-    agent: Any, *, message_count: int, approx_tokens: Optional[int], focus_topic: Optional[str], force: bool,
-    emit_client_status: bool = True,
+    agent: Any, *, message_count: int, approx_tokens: Optional[int], focus_topic: Optional[str], force: bool
 ) -> _CompactionLifecycle:
-    """Log the attempt, emit the (engine-customisable) compacting status, return the lifecycle.
-    ``emit_client_status=False`` keeps a BACKGROUND run quiet: no start status, and the
-    lifecycle stays un-emitted so the activity heartbeats and the terminal edge follow it
-    into silence (the prefetch arm already announced the background summary)."""
+    """Log the attempt, emit the (engine-customisable) compacting status, return the lifecycle."""
     logger.info(
         "context compression started: session=%s messages=%d tokens=~%s model=%s focus=%r", agent.session_id or "none",
         message_count, f"{approx_tokens:,}" if approx_tokens else "unknown", agent.model, focus_topic,
@@ -3975,9 +3950,9 @@ def _announce_compression_start(
             agent.context_compressor, phase="compress", default_message=status, approx_tokens=approx_tokens,
             message_count=message_count, model=agent.model, focus_topic=focus_topic,
         )
-    if status and emit_client_status:
+    if status:
         agent._emit_status(status)
-    return _CompactionLifecycle(agent, bool(status) and emit_client_status)
+    return _CompactionLifecycle(agent, bool(status))
 
 
 def compress_context(
@@ -4053,12 +4028,8 @@ def compress_context(
     # Announce BEFORE the lazy feasibility probe: its live catalog / provider lookups are
     # network-bound (connect timeouts stack up through proxies), and until this status lands
     # the Desktop working row is a bare spinner with no "Summarizing thread" label (#111294).
-    # Prefetch: a background worker's fence carries `prefetch_worker` -> keep this run quiet
-    # (the arm already emitted the "(prefetch)" line; the quiet lifecycle also silences its
-    # activity heartbeats and terminal edge).
     lifecycle = _announce_compression_start(
         agent, message_count=_pre_msg_count, approx_tokens=approx_tokens, focus_topic=focus_topic, force=force,
-        emit_client_status=not bool(getattr(commit_fence, "prefetch_worker", False)),
     )
     # After the announce: an expired token's refresh is a blocking network call. Before the probe and summary call.
     _refresh_main_credential(agent)

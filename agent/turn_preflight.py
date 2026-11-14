@@ -87,27 +87,6 @@ def run_preflight_compression(
         and len(v.messages) > 1
         and v.compression_attempts < max_compression_attempts
     )
-# Prefetch: adopt a finished background summary or arm one without
-    # blocking; while a worker is pending the blocking branch must not fire.
-    from agent.turn_prefetch_compaction import run_prefetch_compaction_step
-
-    _prefetch_action, _prefetch_messages = run_prefetch_compaction_step(
-        agent, v.messages, request_pressure_tokens,
-        system_message=system_message, task_id=effective_task_id,
-    )
-    _prefetch_skip_blocking = _prefetch_action in ("adopted", "armed", "pending")
-    if _prefetch_action == "adopted":
-        v.messages = _prefetch_messages
-        v.conversation_history = conversation_history_after_compression(
-            agent, v.messages, v.conversation_history
-        )
-        _reset_retry_state_after_compaction(agent)
-        # The request was assembled from the PRE-splice messages: refund the
-        # call/budget and re-enter the loop so the spliced list is re-assembled
-        # and re-measured before dispatch. Mirrors the blocking branch below.
-        v.api_call_count = _refund_api_call(agent, v.api_call_count)
-        return _done("continue")
-
     if _eligible:
         # Aux clamp must land before the first compaction fires on the main-window threshold (#114707).
         # Before the cooldown read: a moved compression route clears the previous summariser's cooldown.
@@ -122,7 +101,6 @@ def run_preflight_compression(
         and (not v._preflight_compression_blocked or provider_overflow_preflight)
         and (not defer_preflight(request_pressure_tokens) or provider_overflow_preflight)
         and not _compression_cooldown
-        and not _prefetch_skip_blocking
         and compressor.should_compress(request_pressure_tokens)
     ):
         # Managed local runtime: grow the context window before compressing (last
@@ -342,22 +320,6 @@ def compress_after_tool_results(
                                             _real_tokens)
         return _verdict(False)
 
-    # Prefetch: adopt a finished background summary or arm one without
-    # blocking; while a worker is pending the blocking branch must not fire.
-    from agent.turn_prefetch_compaction import run_prefetch_compaction_step
-
-    _prefetch_action, _prefetch_messages = run_prefetch_compaction_step(
-        agent, messages, _real_tokens,
-        system_message=system_message, task_id=effective_task_id,
-    )
-    _prefetch_skip_blocking = _prefetch_action in ("adopted", "armed", "pending")
-    if _prefetch_action == "adopted":
-        messages = _prefetch_messages
-        conversation_history = conversation_history_after_compression(
-            agent, messages, conversation_history
-        )
-        _reset_retry_state_after_compaction(agent)
-
     # A review fork that still fits its window never spends a summary here (see the helper);
     # ``elif`` below skips it too, so a deliberate skip never reports attempts_exhausted.
     _fork_threshold_only = _review_fork_threshold_only(agent, _real_tokens)
@@ -375,7 +337,6 @@ def compress_after_tool_results(
         and not bool(
             getattr(_compressor, "awaiting_real_usage_after_compression", False)
         )
-        and not _prefetch_skip_blocking
         and not _fork_threshold_only
         and _compressor.should_compress(_real_tokens)
     ):
@@ -451,8 +412,7 @@ def compress_after_tool_results(
         _note_declined_post_tool_compaction(
             agent,
             f"blocked:{_block_reason}" if _block_reason
-            else f"skip_attempts={compression_attempts}/{max_compression_attempts},"
-                 f"prefetch={_prefetch_action}",
+            else f"skip_attempts={compression_attempts}/{max_compression_attempts}",
             _real_tokens,
         )
         _pruned_msgs = _proactive_tool_result_prune(agent, _compressor, messages, _real_tokens)
