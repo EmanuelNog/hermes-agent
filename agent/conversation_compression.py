@@ -174,6 +174,16 @@ def is_compaction_progress_status(text: object) -> bool:
     return isinstance(text, CompactionProgressText) and bool(text.strip())
 
 
+def prefetch_start_status(tokens: int) -> CompactionProgressText:
+    """The prefetch start line, MARKED as compaction progress.
+
+    Upstream classifies progress by the object mark (``CompactionProgressText``), not by wording, so a
+    plain ``template.format(...)`` reaches chat surfaces untagged. The done line stays unmarked on
+    purpose: only the start is progress, the completion is a terminal status.
+    """
+    return CompactionProgressText(PREFETCH_COMPACTION_STATUS_TEMPLATE.format(tokens=max(0, int(tokens))))
+
+
 def compaction_status_kind(kind: str, text: object) -> str:
     """The ``status.update`` kind a viewer gets: a marked lifecycle line is ``compacting`` (#97239).
     Pass the producer's object; ``str()``/``strip()`` copies have lost the mark."""

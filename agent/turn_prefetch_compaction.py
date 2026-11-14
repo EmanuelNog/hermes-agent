@@ -225,9 +225,9 @@ def _prefetch_elapsed_seconds(state: Any) -> int:
 
 def _report_prefetch_start(agent: Any, tokens: int) -> None:
     """Tell the user a background summary is running (routine lifecycle line)."""
-    from agent.conversation_compression import PREFETCH_COMPACTION_STATUS_TEMPLATE
+    from agent.conversation_compression import prefetch_start_status
 
-    agent._emit_status(PREFETCH_COMPACTION_STATUS_TEMPLATE.format(tokens=max(0, int(tokens))))
+    agent._emit_status(prefetch_start_status(tokens))
 
 
 def _report_prefetch_done(agent: Any, state: Any, new_messages: list[dict]) -> None:

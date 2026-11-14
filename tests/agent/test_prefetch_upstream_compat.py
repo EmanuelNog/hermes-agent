@@ -217,7 +217,7 @@ def test_gateway_noise_classification_contract():
     cc = pytest.importorskip("agent.conversation_compression")
     gw = pytest.importorskip("gateway.run")
 
-    start = cc.PREFETCH_COMPACTION_STATUS_TEMPLATE.format(tokens=123456)
+    start = cc.prefetch_start_status(123456)
     done = cc.PREFETCH_COMPACTION_DONE_STATUS_TEMPLATE.format(before=30, after=12, seconds=42)
     fail = cc.PREFETCH_COMPACTION_FAILED_TEMPLATE.format(seconds=42, reason="boom")
 
