@@ -9,11 +9,16 @@ would otherwise start blind (#26035, #74712; direction from #26081 by @LeonSGP43
 The seed rides on ``thread/start.developerInstructions`` after the prompt composition: codex inserts
 that as the first developer message of every request in the thread, so the cap below bounds a
 per-request cost and keeps the most recent turns (the ones the next answer depends on).
+
+Because the seed IS a flattened transcript, content inside it is neutralized before it is labelled:
+a tool result that carries its own ``[USER]`` line must not read as a turn (compaction laundering).
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List
+
+from agent.compaction_text import neutralize_summary_role_labels
 
 # Tail cap on the rendered history; ~8k tokens, resent by codex on every request of the thread.
 MAX_HISTORY_SEED_CHARS = 32_000
@@ -34,7 +39,9 @@ def _text_of(content: Any) -> str:
 
 def _render_row(msg: dict[str, Any]) -> str:
     role = msg.get("role")
-    text = _text_of(msg.get("content")).strip()
+    # Content is about to be presented as a labelled record, so a ``[USER]``-shaped token inside it
+    # must not read as a turn boundary of its own (same guard as the compaction summary).
+    text = neutralize_summary_role_labels(_text_of(msg.get("content")).strip())
     if role == "user":
         return f"[USER]\n{text}" if text else ""
     if role == "assistant":
