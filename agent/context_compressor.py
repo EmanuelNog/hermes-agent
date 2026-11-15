@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- 2026-11-15 upstream port (c5da1ff1b20c..fd8a6c41ace5): the file is far over target; this port resolves two conflicts by keeping the fork's role-label escape (neutralize_summary_role_labels + the _bound_summary_input fragment guard) while taking upstream's boundary redaction (_redact_compaction_text moved into this module). Re-check at the next port; the commit to shrink is moving a helper into a context_compressor_<topic>.py sibling, not deleting the escape.
 """Automatic context window compression: a cheap auxiliary model summarizes middle turns while head and
 tail are protected (iterative summaries, token-budget tail, tool-output pruning first, scaled budgets)."""
 
@@ -52,8 +53,8 @@ from agent.model_metadata import (
 )
 from agent.replayed_reasoning import codex_reasoning_replay_tokens, strip_opaque_replay_items
 from agent.context_default_record import last_defaulted_context_length
-from agent.redact import redact_sensitive_text
-from agent.compaction_text import _redact_compaction_text, neutralize_summary_role_labels
+from agent.redact import redact_derived_text, redact_sensitive_text
+from agent.compaction_text import neutralize_summary_role_labels
 from agent.turn_context import drop_stale_api_content
 from tools.todo_tool import TODO_INJECTION_HEADER
 
@@ -1167,6 +1168,13 @@ _TASK_SNAPSHOT_HEADINGS = (HISTORICAL_TASK_HEADING, _LEGACY_ACTIVE_TASK_HEADING)
 _HISTORICAL_TASK_SECTION_RE = re.compile(
     rf"(?ms)^(?:{'|'.join(re.escape(heading) for heading in _TASK_SNAPSHOT_HEADINGS)})\s*\n.*?(?=^## |\Z)"
 )
+
+
+def _redact_compaction_text(text: Any) -> str:
+    """Redact text that crosses a compaction summary boundary (strict mode).
+    ``force=True`` overrides ``security.redact_secrets: false``; URL credentials are redacted too, since
+    summaries persist and re-enter every later prompt."""
+    return redact_derived_text(text)
 
 
 def _dedupe_append(items: list[str], value: str, *, limit: int) -> None:
@@ -3761,6 +3769,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             content_to_summarize, coverage = self._sample_summary_records(records, slices)
             self._record_summary_input_coverage(coverage)
             # Typed turns (#146750): user, assistant tool_calls and tool output each keep their real role.
+            # Typed rows (async-delegation results, notices; not /steer) and flagged nudges are not user input.
             typed_turns = typed_summary_messages(
                 turns_to_summarize, records, slices,
                 lambda m: self._is_real_user_turn(m) and not is_user_role_scaffolding(m),

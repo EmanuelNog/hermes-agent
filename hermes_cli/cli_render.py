@@ -33,7 +33,7 @@ def _cli():
 _REASONING_TAGS = THINK_TAG_NAMES
 
 
-_TOOL_CALL_TAGS = ("tool_call", "tool_calls", "tool_result", "function_call", "function_calls")
+_TOOL_CALL_TAGS = ("tool_call", "tool_calls", "tool_result", "function_call", "function_calls", "toolcall")
 
 
 def _strip_reasoning_tags(text: str) -> str:
@@ -310,7 +310,7 @@ def _install_skin_light_mode_hook() -> None:
     SkinConfig._hermes_light_mode_hook_installed = True  # type: ignore[attr-defined]
 
 
-_SKIN_AWARE_ANSI_INSTANCES: list["_SkinAwareAnsi"] = []
+_SKIN_AWARE_ANSI_INSTANCES: list[_SkinAwareAnsi] = []
 
 
 class _SkinAwareAnsi:

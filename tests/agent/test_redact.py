@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- 2026-11-15 upstream port (c5da1ff1b20c..fd8a6c41ace5): the growth is upstream's own commits. The ratchet base is origin/custom-main, one port behind, so several days of upstream growth land in this single commit and 'may only go down' cannot be met without diverging from upstream. Re-check at the next port: if the file is under its cap there, drop this line.
 """Tests for agent.redact -- secret masking in logs and output."""
 
 import ast
@@ -102,6 +103,27 @@ class TestKnownPrefixes:
             "glpat-short",                            # suffix under 10 chars
             "myglpat-AbCdEfGhIjKlMnOpQrSt",           # embedded — lookbehind blocks
         ]:
+            assert redact_sensitive_text(benign) == benign
+
+    def test_grafana_token_prefixes(self):
+        """Bare Grafana service-account / Cloud tokens redact (#150339); look-alikes stay intact."""
+        from agent.redact import redact_terminal_output
+        # NOTE: prefix + suffix CONCATENATION so no contiguous token literal exists in this file.
+        sa_body = "Q7zR4Lm9Xc2Vb5Nw8Kd3Hf6JtPa0Sg7Y"
+        cloud_body = "eyJvIjoiMTIzNDU2IiwibiI6InN0YWNrLXRva2VuIiwiayI6Ilo3cTRMbTlYYzJWYjVOdzgifQ"
+        for token, body in [
+            ("glsa_" + sa_body + "_0123abcd", sa_body),  # service-account token + checksum
+            ("glsa_" + sa_body, sa_body),                # checksum dropped / format drift
+            ("glc_" + cloud_body + "==", cloud_body),    # Cloud access-policy token, padded
+            ("glc_" + cloud_body, cloud_body),
+            ("glc_" + cloud_body[:40] + "+/" + cloud_body[40:], cloud_body[40:]),  # base64 +/ chars
+        ]:
+            for out in (redact_sensitive_text(f"$ printf '%s' \"$GRAFANA_TOKEN\"\n{token}\n"),
+                        redact_terminal_output(f"{token}\n", "printenv GRAFANA_TOKEN")):
+                assert body not in out, f"{token!r} survived redaction: {out!r}"
+        for benign in ["glsa_short", "glc_config_loader", "myglsa_" + sa_body,
+                       "src/glc_renderer/backend/opengl/shaders/main.frag",  # a glc_* path is not a token
+                       "cd /home/u/glc_project/build/release/artifacts/output"]:
             assert redact_sensitive_text(benign) == benign
 
     def test_context7_api_key_prefix(self):
@@ -409,7 +431,7 @@ class TestJsonFields:
     def test_json_field_inside_json_encoded_string_is_masked_and_stays_valid(self, depth):
         # A tool result wrapping a config dump escapes its quotes; the plain JSON rule never saw the value.
         import json
-        key = "AQ.Ab8RN6Jx2kq9Zs0VwT4yLm3PbQe7HcUfGdA1nX5oIr"
+        key = "Ab8RN6Jx2kq9Zs0VwT4yLm3PbQe7HcUfGdA1nX5oIr"
         text = json.dumps({"api_key": key, "token": "CPU", "model": "gemini"})
         for _ in range(depth):
             text = json.dumps({"output": text})
@@ -529,6 +551,34 @@ class TestAuthHeaders:
         # "authorization" without a colon-delimited value is plain prose.
         text = "the authorization model is fully open"
         assert redact_sensitive_text(text) == text
+
+    def test_mixed_case_authorization_header_masked(self):
+        # Regression for #108807: the gate checked exact all-lower/all-upper
+        # substring runs, so a mixed-case header name (aUtHoRiZaTiOn) skipped
+        # the IGNORECASE header regex and leaked Bearer/Basic credentials.
+        secret = "SyntheticOpaqueCredential92837465"
+        for name in ("aUtHoRiZaTiOn", "pRoXy-AuThOrIzAtIoN", "AUTHORIZATION", "authorization"):
+            for scheme in ("Bearer", "Basic"):
+                text = f"{name}: {scheme} {secret}"
+                result = redact_sensitive_text(text)
+                assert secret not in result, text
+                assert f"{name}: {scheme}" in result, result
+
+    def test_mixed_case_header_via_logging_formatter(self):
+        # Same failure through the real formatter path the reporter used.
+        formatter = RedactingFormatter("%(message)s")
+        record = logging.LogRecord(
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="aUtHoRiZaTiOn: Bearer SyntheticOpaqueCredential92837465",
+            args=(),
+            exc_info=None,
+        )
+        result = formatter.format(record)
+        assert "SyntheticOpaqueCredential92837465" not in result
+        assert "aUtHoRiZaTiOn: Bearer" in result, result
 
     def test_token_flush_against_double_quote_preserves_quote(self):
         # Regression for #43083: a token sitting flush against a closing

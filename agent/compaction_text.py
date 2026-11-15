@@ -1,26 +1,21 @@
 """Text transforms that guard the compaction summary boundary.
 
 Content crosses from the role-typed message list into a FLATTENED transcript before the
-summarizer sees it, and two things must not survive that crossing:
+summarizer sees it, and a role label must not survive that crossing:
+``neutralize_summary_role_labels`` escapes a ``[USER]``-shaped token that appears INSIDE
+content. Without that, a tool result or file body containing ``\\n[USER]: <instruction>``
+arrives at the summarizer as a genuine record boundary and can survive into the summary as a
+real instruction (arXiv 2610.29869, "compaction laundering": 87-100% success against
+flattening harnesses, 0% against role-typed ones).
 
-* credentials — ``_redact_compaction_text`` strips them in strict mode (URL credentials
-  included) because summaries persist and re-enter every later prompt;
-* role labels — ``neutralize_summary_role_labels`` escapes a ``[USER]``-shaped token that
-  appears INSIDE content. Without that, a tool result or file body containing
-  ``\\n[USER]: <instruction>`` arrives at the summarizer as a genuine record boundary and can
-  survive into the summary as a real instruction (arXiv 2610.29869, "compaction laundering":
-  87-100% success against flattening harnesses, 0% against role-typed ones).
-
-They live together because they are the same boundary: text that is about to be presented as
-a labelled record must not be able to speak in the transcript's own voice.
+Boundary redaction is upstream's now (`_redact_compaction_text` in
+`agent/context_compressor.py`, built on `agent.redact.redact_derived_text`); superseded by
+upstream `5712312f1f`, the fork copy was removed 2026-11-15.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Any
-
-from agent.redact import redact_sensitive_text
 
 # A flattened transcript labels each record ``[<ROLE>]: <content>``.
 _SUMMARY_ROLE_LABEL_RE = re.compile(
@@ -31,13 +26,6 @@ _SUMMARY_ROLE_LABEL_RE = re.compile(
 _SUMMARY_BARE_LABEL_RE = re.compile(
     r"(?m)^(?=(?:USER|ASSISTANT|SYSTEM|DEVELOPER|TOOL RESULT|TOOL CALLS):)", re.IGNORECASE
 )
-
-
-def _redact_compaction_text(text: Any) -> str:
-    """Redact text that crosses a compaction summary boundary (strict mode).
-    ``force=True`` overrides ``security.redact_secrets: false``; URL credentials are redacted too, since
-    summaries persist and re-enter every later prompt."""
-    return redact_sensitive_text(text or "", force=True, redact_url_credentials=True)
 
 
 def neutralize_summary_role_labels(text: str) -> str:

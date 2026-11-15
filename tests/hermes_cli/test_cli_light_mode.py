@@ -573,7 +573,7 @@ class TestRedrawReRenderOnThemeRefresh:
         events = []
         monkeypatch.setattr(cli, "_force_full_redraw", lambda: events.append("redraw"))
         monkeypatch.setattr(cli_mod, "_refresh_theme", lambda: False)
-        never = lambda *a, **k: events.append("recap")  # noqa: E731
+        never = lambda *a, **k: events.append("recap")
         monkeypatch.setattr(cli, "_display_resumed_history", never)
         monkeypatch.setattr(cli_mod, "_clear_output_history", lambda: events.append("clear"))
         monkeypatch.setattr(cli_mod, "_cprint", lambda *a, **k: None)
