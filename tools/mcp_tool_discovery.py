@@ -805,6 +805,41 @@ def restart_mcp_servers_with_new_inputs(names: set[str]) -> list[str]:
         return changed
 
 
+def restart_mcp_servers(names: set[str]) -> list[str]:
+    """Respawn the named servers in THIS process, whether or not anything they launch with changed:
+    the connection (and a stdio child, killed through its pgroup) is closed, the connect cooldown
+    cleared, and discovery reconnects them — so a rebuilt executable on disk is what serves the
+    next call. ``/reload-mcp`` cannot do it: it reconciles config and leaves a live, still-enabled
+    server connected, and a process cannot re-exec a child it never stopped (chk-n5va.155).
+
+    Returns the configured names it tore down and rediscovered; an unconfigured name is ignored.
+    A connection this profile only borrows is detached so this profile connects its own, exactly
+    as :func:`restart_mcp_servers_with_new_inputs` does."""
+    with _RESTART_LOCK:
+        scope = _core._mcp_registry_scope()
+        owned, borrowed = [], []
+        with _owner_secret_scope():
+            servers = _config._load_mcp_config()
+            for name in sorted(names):
+                if not servers.get(name):
+                    continue
+                with _core._lock:
+                    key = _resolve_server_key(name, scope, current=False)
+                (owned if key == _server_key(name, scope, current=False) else borrowed).append((name, key))
+        if not owned and not borrowed:
+            return []
+        restarted = sorted(name for name, _key in owned + borrowed)
+        logger.info("MCP server(s) %s: respawning on request", ", ".join(restarted))
+        if owned:
+            _lifecycle.shutdown_mcp_servers(scope=scope, names={name for name, _key in owned})
+        for _name, key in borrowed:
+            _registration._remove_server_scope(key, scope)
+        for name in restarted:
+            _clear_connect_failure(name)
+        discover_mcp_tools()
+        return restarted
+
+
 def _forget_lazy_server(key) -> None:
     """Drop a schema-cache (lazy) registration whose config entry is gone: its cached tools would
     otherwise stay callable and spawn the server on first use."""

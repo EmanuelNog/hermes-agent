@@ -1598,6 +1598,25 @@ def _(rid, params: dict) -> dict:
         "oauth_needed": needs_oauth_token, "oauth_tokens_present": True if needs_oauth_token else None})
 
 
+@_mcp_rpc("restart")
+def _(rid, params: dict) -> dict:
+    """Respawn ONE server in the running owner: close its connection (a stdio child dies with its
+    pgroup), reconnect it from config, then report the row ``mcp.servers.status`` shows next →
+    ``{ok, name, restarted, status, tools, error}``. The verb for a rebuilt binary: ``reload.mcp``
+    reconciles config and leaves a live, still-enabled server on its old process. RPC pool: the
+    reconnect may cold-spawn npx."""
+    name, servers, err = _mcp_named_server(rid, params)
+    if err:
+        return err
+    discovery = _tools_mod("tools.mcp_tool_discovery")
+    restarted = discovery.restart_mcp_servers({name})
+    row = next((r for r in discovery.get_mcp_status(servers) if r.get("name") == name), {})
+    status = row.get("status") or "configured"
+    return _ok(rid, {"ok": name in restarted and status in ("connected", "lazy"), "name": name,
+                     "restarted": name in restarted, "status": status,
+                     "tools": int(row.get("tools") or 0), "error": row.get("error")})
+
+
 @_mcp_rpc("remove")
 def _(rid, params: dict) -> dict:
     """Remove a server from the profile's config.yaml → ``{ok: true, removed: true}``."""

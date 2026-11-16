@@ -1951,6 +1951,24 @@
       }
     },
     {
+      "name": "mcp.servers.restart",
+      "summary": "Close and reconnect one server in the running owner \u2014 the rebuilt-binary case `reload.mcp` leaves on its old process.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/McpServerNameParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/McpServersRestartResult"
+        }
+      }
+    },
+    {
       "name": "mcp.servers.set_api_key",
       "summary": "Store a credential in the profile's .env and reference it from the server config (header or env).",
       "params": [
@@ -24191,6 +24209,52 @@
           "removed"
         ],
         "title": "McpServersRemoveResult",
+        "type": "object"
+      },
+      "McpServersRestartResult": {
+        "additionalProperties": false,
+        "description": "``status`` / ``tools`` are the row ``mcp.servers.status`` reports after the reconnect.",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "restarted": {
+            "title": "Restarted",
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/McpRuntimeStatus"
+          },
+          "tools": {
+            "title": "Tools",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          }
+        },
+        "required": [
+          "ok",
+          "name",
+          "restarted",
+          "status",
+          "tools"
+        ],
+        "title": "McpServersRestartResult",
         "type": "object"
       },
       "McpServersSetApiKeyParams": {

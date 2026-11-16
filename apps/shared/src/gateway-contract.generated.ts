@@ -4448,6 +4448,15 @@ export interface McpProbeTool {
   name: string
   description: string
 }
+/** ``status`` / ``tools`` are the row ``mcp.servers.status`` reports after the reconnect. */
+export interface McpServersRestartResult {
+  ok: boolean
+  name: string
+  restarted: boolean
+  status: McpRuntimeStatus
+  tools: number
+  error?: string | null
+}
 export interface McpServersRemoveResult {
   ok: boolean
   removed: boolean
@@ -6554,6 +6563,8 @@ export interface RpcMethods {
   'mcp.servers.oauth.start': { params: McpOauthStartParams; result: McpOauthStartResult }
   /** Drop a server from the profile's config.yaml. */
   'mcp.servers.remove': { params: McpServerNameParams; result: McpServersRemoveResult }
+  /** Close and reconnect one server in the running owner — the rebuilt-binary case `reload.mcp` leaves on its old process. */
+  'mcp.servers.restart': { params: McpServerNameParams; result: McpServersRestartResult }
   /** Store a credential in the profile's .env and reference it from the server config (header or env). */
   'mcp.servers.set_api_key': { params: McpServersSetApiKeyParams; result: McpServersSetApiKeyResult }
   /** Cached runtime state per configured server; never connects, probes, or starts auth. */
@@ -6973,6 +6984,7 @@ export const RPC_METHODS = [
   'mcp.servers.oauth.poll',
   'mcp.servers.oauth.start',
   'mcp.servers.remove',
+  'mcp.servers.restart',
   'mcp.servers.set_api_key',
   'mcp.servers.status',
   'mcp.servers.test',

@@ -1141,6 +1141,54 @@ def cmd_mcp_configure(args):
     _info("Run /reload-mcp for changes to take effect.")
 
 
+def cmd_mcp_restart(args) -> int:
+    """``hermes mcp restart <name>``: respawn ONE server inside the running owner.
+
+    The other verbs here write config; this one changes a live process, so it needs the process that
+    holds the MCP children (gateway, desktop backend, TUI). Its whole reason to exist is the
+    rebuilt-binary case: ``/reload-mcp`` reconciles config and leaves a live, still-enabled server
+    connected to the pre-rebuild inode, and there is no other path to stop one child. With no owner
+    running there is nothing connected to respawn: say so instead of starting a gateway for it.
+    """
+    import asyncio
+
+    from hermes_constants import get_hermes_home
+    from hermes_cli.gateway_client import GatewayClientError
+    from hermes_cli.gateway_runtime import attachable, discover_gateway_endpoint
+
+    name = str(getattr(args, "name", "") or "").strip()
+    if not name:
+        _error("Name the server to restart: hermes mcp restart <name>")
+        return 2
+    discovery = discover_gateway_endpoint(get_hermes_home())
+    if not attachable(discovery):
+        _error(f"No running Hermes owns MCP servers ({discovery.state}); nothing to respawn.")
+        _info("Start the gateway (or a desktop session) and re-run, or probe from a shell with "
+              "`hermes mcp test <name>`.")
+        return 1
+
+    async def _restart():
+        from hermes_cli.gateway_client import connect_gateway
+        async with connect_gateway(discovery.endpoint) as client:
+            return await client.rpc("mcp.servers.restart", name=name)
+
+    from websockets.exceptions import WebSocketException
+    try:
+        result = asyncio.run(_restart())
+    except (GatewayClientError, OSError, TimeoutError, WebSocketException) as exc:
+        _error(f"Restart failed: {exc if isinstance(exc, GatewayClientError) else 'gateway connection failed'}")
+        return 1
+    if result.get("ok"):
+        _success(f"Restarted '{name}': {result.get('status')}, "
+                 f"{int(result.get('tools') or 0)} tool(s)")
+        _info("Running chats pick the new tools up on their next turn.")
+        return 0
+    _error(f"'{name}' did not come back up ({result.get('status')}): "
+           f"{result.get('error') or 'the owner reported no connection'}")
+    _info(f"Run `hermes mcp test {name}` for the connection error.")
+    return 1
+
+
 _MCP_USAGE = (
     "hermes mcp                                    Open the catalog picker (default)",
     "hermes mcp catalog                            List Nous-approved MCPs",
@@ -1151,6 +1199,7 @@ _MCP_USAGE = (
     "hermes mcp remove <name>                      Remove a server",
     "hermes mcp list                               List configured servers",
     "hermes mcp test <name>                        Test connection",
+    "hermes mcp restart <name>                     Respawn one server in the running gateway",
     "hermes mcp configure <name>                   Toggle tools",
     "hermes mcp login <name>                       Re-authenticate OAuth",
     "hermes mcp reauth <name> | --all              Re-auth one or all OAuth servers",
@@ -1178,6 +1227,7 @@ def mcp_command(args):
         "add": cmd_mcp_add, "remove": cmd_mcp_remove, "rm": cmd_mcp_remove, "list": cmd_mcp_list,
         "ls": cmd_mcp_list, "test": cmd_mcp_test, "configure": cmd_mcp_configure,
         "config": cmd_mcp_configure, "login": cmd_mcp_login, "reauth": cmd_mcp_reauth,
+        "restart": cmd_mcp_restart,
     }.get(action)
     if handler:
         # A handler's int return is the process exit code (``main()`` exits non-zero on it).

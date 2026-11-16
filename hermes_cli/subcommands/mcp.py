@@ -41,6 +41,10 @@ def build_mcp_parser(subparsers, *, cmd_mcp: Callable) -> None:
     mcp_test_p = mcp_sub.add_parser("test", help="Test MCP server connection")
     mcp_test_p.add_argument("name", help="Server name to test")
 
+    mcp_restart_p = mcp_sub.add_parser(
+        "restart", help="Respawn one server in the running gateway (rebuilt-binary case)")
+    mcp_restart_p.add_argument("name", help="Server name to respawn")
+
     mcp_cfg_p = mcp_sub.add_parser("configure", aliases=["config"], help="Toggle tool selection")
     mcp_cfg_p.add_argument("name", help="Server name to configure")
 

@@ -498,6 +498,22 @@ method("mcp.servers.test", params=McpServerNameParams, result=McpServersTestResu
        doc="Connect, list tools, disconnect — an OAuth server with no token on disk is reported as not ok.")
 
 
+class McpServersRestartResult(Result):
+    """``status`` / ``tools`` are the row ``mcp.servers.status`` reports after the reconnect."""
+
+    ok: bool
+    name: str
+    restarted: bool
+    status: McpRuntimeStatus
+    tools: int
+    error: str | None = None
+
+
+method("mcp.servers.restart", params=McpServerNameParams, result=McpServersRestartResult,
+       doc="Close and reconnect one server in the running owner — the rebuilt-binary case "
+           "`reload.mcp` leaves on its old process.")
+
+
 class McpServersRemoveResult(Result):
     ok: bool
     removed: bool
