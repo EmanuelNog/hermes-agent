@@ -27,9 +27,11 @@ import { hermesConfigCacheWriter, useHermesConfigRecord } from '../../hooks/use-
 import { useOnProfileSwitch } from '../../hooks/use-on-profile-switch'
 import { useProfileSwitchLatch } from '../../hooks/use-profile-switch-latch'
 import { seedOptions } from '../connectors/data/persist'
+import { restartMcpServer } from '../connectors/data/rpc'
 
 import { parseServersDoc, withEnabled } from './mcp-doc'
 import { MCP_CATALOG_KEY, type ServerStatus, statusOf } from './mcp-status'
+import { restartServer as runRestartServer } from './restart-server'
 import { type McpDraft, useMcpDraft } from './use-mcp-draft'
 import { type McpProbes, useMcpProbes } from './use-mcp-probes'
 
@@ -52,6 +54,8 @@ export interface McpServersController extends McpDraft, PublishedProbes {
   profilePending: boolean
   refetchConfig: () => void
   removeServer: (name: string) => Promise<boolean>
+  restartServer: (name: string) => Promise<void>
+  restarting: null | string
   saveDoc: () => Promise<void>
   saving: boolean
   servers: McpServers
@@ -94,6 +98,8 @@ export function useMcpServers({ gateway, profile }: UseMcpServersOptions): McpSe
   const [saving, setSaving] = useState(false)
 
   const [authing, setAuthing] = useState<null | string>(null)
+
+  const [restarting, setRestarting] = useState<null | string>(null)
 
   const servers = useMemo(() => getServers(config ?? null), [config])
   const names = useMemo(() => Object.keys(servers), [servers])
@@ -211,6 +217,47 @@ export function useMcpServers({ gateway, profile }: UseMcpServersOptions): McpSe
     } finally {
       if (profileEpoch.current === epoch) {
         setAuthing(null)
+      }
+    }
+  }
+
+  const restartServer = async (serverName: string) => {
+    if (profilePending) {
+      return
+    }
+
+    const epoch = profileEpoch.current
+
+    setRestarting(serverName)
+    fleet.setProbe(serverName, 'probing')
+
+    try {
+      await runRestartServer(serverName, name => restartMcpServer(profile ?? appProfile, name), {
+        refreshTools: name => void fleet.runProbe(name),
+        report: ({ error, name, ok, status, tools }) => {
+          if (profileEpoch.current !== epoch) {
+            return
+          }
+
+          if (ok) {
+            notify({
+              kind: 'success',
+              title: m.restartedTitle,
+              message: m.restartedMessage(name, status, tools)
+            })
+
+            return
+          }
+
+          const failure = error ?? m.restartFailed
+
+          fleet.setProbe(name, { ok: false, error: failure, tools: [] })
+          notifyError(new Error(failure), name)
+        }
+      })
+    } finally {
+      if (profileEpoch.current === epoch) {
+        setRestarting(null)
       }
     }
   }
@@ -415,6 +462,8 @@ export function useMcpServers({ gateway, profile }: UseMcpServersOptions): McpSe
     profilePending,
     refetchConfig: () => void refetchConfigQuery(),
     removeServer,
+    restartServer,
+    restarting,
     runProbe: fleet.runProbe,
     saveDoc,
     saving,

@@ -17,9 +17,18 @@ export interface ConnectorDialogMenuProps {
   onDisconnect?: () => void
   onReconnect?: () => void
   onRefreshTools: () => void
+  /** Respawn a local server in place — the rebuilt-binary case a config reload cannot fix. */
+  onRestart?: () => void
+  restartBusy?: boolean
 }
 
-export function ConnectorDialogMenu({ onDisconnect, onReconnect, onRefreshTools }: ConnectorDialogMenuProps) {
+export function ConnectorDialogMenu({
+  onDisconnect,
+  onReconnect,
+  onRefreshTools,
+  onRestart,
+  restartBusy = false
+}: ConnectorDialogMenuProps) {
   const { t } = useI18n()
   const copy = t.connectorsPage
 
@@ -39,6 +48,11 @@ export function ConnectorDialogMenu({ onDisconnect, onReconnect, onRefreshTools 
         <DropdownMenuItem className={dropdownMenuRow} onSelect={onRefreshTools}>
           {copy.dialog.menuRefreshTools}
         </DropdownMenuItem>
+        {onRestart ? (
+          <DropdownMenuItem className={dropdownMenuRow} disabled={restartBusy} onSelect={onRestart}>
+            {copy.dialog.menuRestartServer}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem className={dropdownMenuRow} onSelect={() => void openConnectorsAdmin()}>
           {copy.dialog.orgLink}

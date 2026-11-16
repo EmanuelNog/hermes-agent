@@ -232,6 +232,7 @@ export interface Translations extends NoticeTranslations {
       disconnectTitle: (name: string) => string
       disconnectBody: string
       menuRefreshTools: string
+      menuRestartServer: string
       moreActions: string
       removeServerTitle: (name: string) => string
       removeServerBody: string
@@ -1311,6 +1312,9 @@ export interface Translations extends NoticeTranslations {
       allServers: string
       authenticatedTitle: string
       authenticatedMessage: (server: string, count: number) => string
+      restartedTitle: string
+      restartedMessage: (server: string, status: string, count: number) => string
+      restartFailed: string
       authenticate: string
       noOutput: string
       deepLinkTitle: string

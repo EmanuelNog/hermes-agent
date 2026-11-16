@@ -178,3 +178,7 @@ export const setMcpBearerToken = (scope: ProfileScope, name: string, value: stri
 export const listMcpServers = (scope: ProfileScope) => call(scope, 'mcp.servers.list', {})
 
 export const mcpServerStatus = (scope: ProfileScope) => call(scope, 'mcp.servers.status', {})
+
+/** Close and reconnect one server in the running owner — what `reload.mcp` leaves on its old process. */
+export const restartMcpServer = (scope: ProfileScope, name: string) =>
+  call(scope, 'mcp.servers.restart', { name }, 'foreground')

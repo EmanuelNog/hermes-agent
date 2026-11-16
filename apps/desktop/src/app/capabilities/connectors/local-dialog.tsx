@@ -64,7 +64,13 @@ export function LocalConnectorDialog({
       cost={localCost(controller, name)}
       installFields={installFields}
       installing={installing}
-      menu={<ConnectorDialogMenu onRefreshTools={refreshTools} />}
+      menu={
+        <ConnectorDialogMenu
+          onRefreshTools={refreshTools}
+          onRestart={plugin === undefined && installed ? () => void controller.restartServer(name) : undefined}
+          restartBusy={controller.restarting === name}
+        />
+      }
       onAuthenticate={() => void controller.authenticate(name)}
       onConnect={onConnect}
       onInstall={onInstall}
