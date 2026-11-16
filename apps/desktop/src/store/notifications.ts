@@ -36,6 +36,10 @@ export interface AppNotification {
   placement?: NotificationPlacement
   /** Survives clearNotifications: a standing offer, not feedback on the last turn. */
   persistent?: boolean
+  /** Will never dismiss itself (no timer): a standing offer, a sticky notice, an error the
+   *  user must act on. Such a card is not feedback on the last action, so it must not hold the
+   *  front slot of its stack against newer cards — it would swallow them while it stands. */
+  sticky?: boolean
 }
 
 export interface NotificationInput {
@@ -341,6 +345,7 @@ function showNotification(input: NotificationInput, errorCategory: ErrorToastCat
   }
 
   const id = input.id ?? `${Date.now()}-${notificationCounter++}`
+  const duration = input.durationMs ?? defaultDuration(kind)
 
   const notification: AppNotification = {
     id,
@@ -356,15 +361,15 @@ function showNotification(input: NotificationInput, errorCategory: ErrorToastCat
     onDismiss: input.onDismiss,
     createdAt: Date.now(),
     placement: input.placement ?? defaultPlacement(kind, input.action),
-    persistent: input.persistent
+    persistent: input.persistent,
+    // No timer means no self-departure: the card stays until the user acts on it.
+    sticky: duration <= 0
   }
 
   window.clearTimeout(timers.get(id))
   timers.delete(id)
   // Visual depth is capped by CardStack, not by discarding queued notifications.
   $notifications.set([notification, ...$notifications.get().filter(item => item.id !== id)])
-
-  const duration = input.durationMs ?? defaultDuration(kind)
 
   if (duration > 0) {
     timers.set(

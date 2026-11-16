@@ -5,9 +5,9 @@ import { stubResizeObserver } from '@/test/jsdom'
 
 import { CardStack } from './card-stack'
 
-function Stack({ items }: { items: string[] }) {
+function Stack({ items, pinned }: { items: string[]; pinned?: (item: string) => boolean }) {
   return (
-    <CardStack getKey={item => item} items={items} surfaceClassName="border">
+    <CardStack getKey={item => item} items={items} pinned={pinned} surfaceClassName="border">
       {(item, action) => <button disabled={!action.active || action.busy}>{item}</button>}
     </CardStack>
   )
@@ -53,5 +53,29 @@ describe('CardStack completion footprint', () => {
     expect((getByRole('button', { name: 'next' }) as HTMLButtonElement).disabled).toBe(false)
     expect(host.style.minHeight).toBe(occupiedHeight)
     expect(host.style.transition).toBe('')
+  })
+
+  // A pinned card (one that never departs on its own) is visible from anywhere in the stack, so
+  // holding the front for it would hide every newer card behind it for as long as it stands.
+  it('yields the front slot when the held card is pinned', async () => {
+    const pinned = (item: string) => item === 'standing'
+    const { container, rerender } = render(<Stack items={['standing']} pinned={pinned} />)
+    expect(container.querySelector('[data-stack-key="standing"]')?.getAttribute('data-stack-active')).toBe('true')
+
+    rerender(<Stack items={['fresh', 'standing']} pinned={pinned} />)
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-stack-key="fresh"]')?.getAttribute('data-stack-active')).toBe('true')
+    )
+    await waitFor(() => expect(container.querySelector('[data-stack-key="standing"]')).toBeNull())
+  })
+
+  it('keeps the front slot for a held card that is not pinned', () => {
+    const { container, rerender } = render(<Stack items={['reading']} />)
+
+    rerender(<Stack items={['fresh', 'reading']} />)
+
+    expect(container.querySelector('[data-stack-key="reading"]')?.getAttribute('data-stack-active')).toBe('true')
+    expect(container.querySelector('[data-stack-key="fresh"]')).toBeNull()
   })
 })

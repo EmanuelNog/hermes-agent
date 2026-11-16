@@ -19,6 +19,10 @@ interface CardStackProps<T> {
   /** Surface only. All placements share the geometry and gesture controller. */
   surfaceClassName: string
   expanded?: boolean
+  /** An item that is never removed on its own (a standing offer, not feedback on the last
+   *  action). It keeps its own slot at the back, so it must never hold the front against a
+   *  newer arrival — otherwise it swallows every card that comes after it. */
+  pinned?: (item: T) => boolean
   swipeDirections?: readonly CardStackDirection[]
   onSwipe?: (item: T, direction: CardStackDirection, action: CardStackAction) => void
 }
@@ -39,6 +43,7 @@ export function CardStack<T>({
   children,
   surfaceClassName,
   expanded = false,
+  pinned,
   swipeDirections = NO_SWIPES,
   onSwipe
 }: CardStackProps<T>) {
@@ -46,7 +51,12 @@ export function CardStack<T>({
   const [frontKey, setFrontKey] = useState<string | undefined>(() => items[0] && getKey(items[0]))
   // Keep the item being read when newer items arrive. Cursor's live projection
   // keeps its previous entry id until that entry leaves the pending list.
-  const front = items.find(item => getKey(item) === frontKey) ?? items[0]
+  const held = items.find(item => getKey(item) === frontKey) ?? items[0]
+  // …unless the item being read is pinned: it is visible from wherever it sits, so holding the
+  // front for it would hide every newer card behind it for as long as it stands (nothing removes
+  // a pinned card on a timer).
+  const promoteOverPinned = Boolean(held && items[0] !== held && pinned?.(held))
+  const front = promoteOverPinned ? items[0] : held
   const currentKey = front && getKey(front)
   useLayoutEffect(() => {
     setFrontKey(currentKey)

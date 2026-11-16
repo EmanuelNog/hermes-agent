@@ -225,6 +225,10 @@ export function NotificationDeck({
       onSwipe={(notification, _side, action) => {
         void action.depart(() => userDismiss(notification.id))
       }}
+      // A card that never dismisses itself (a standing offer, a sticky notice, an error to
+      // act on) is not feedback on the last action: it sits wherever the order puts it, and a
+      // transient toast always takes the front it would otherwise hold (chk-n5va.157).
+      pinned={notification => notification.sticky === true}
       surfaceClassName={cn(STACK_SURFACE, 'rounded-lg')}
       swipeDirections={['left', 'right']}
     >
