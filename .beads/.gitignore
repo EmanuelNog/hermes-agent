@@ -78,6 +78,7 @@ bd.db
 
 # br runtime (frankensqlite era) — machine-local engine files, never commit
 dolt*
+.br-wal-index-*/
 .br_recovery/
 *.tmp
 
