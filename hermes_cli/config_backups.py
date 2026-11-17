@@ -1,16 +1,18 @@
-"""Point-in-time copies of ``config.yaml``: one directory, one naming scheme, bounded count.
+"""Point-in-time copies of ``config.yaml`` (and ``.env``): one directory, one naming scheme, bounded count.
 
 Every writer that wants a "before" copy of the user's config (setup wizard, corrupt-file
-snapshot, model migrations) goes through :func:`backup_config`. Copies live in
+snapshot, model migrations, pre-schema-migration) goes through :func:`backup_config`. Copies live in
 ``<HERMES_HOME>/backups/config/`` — ``backups/`` is already excluded from full backups, so they
-never nest — as ``config.yaml.<reason>.<YYYYMMDD-HHMMSS>``. A copy identical to the newest one
+never nest — as ``<name>.<reason>.<YYYYMMDD-HHMMSS>``. A copy identical to the newest one
 for the same reason is skipped, and only the newest ``keep`` per reason survive, so repeated
-``hermes setup`` runs or a gateway restarting against broken YAML cannot litter the home dir.
+``hermes setup`` runs, a gateway restarting against broken YAML, or a config migration re-run on
+every boot cannot litter the home dir.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import time
 from pathlib import Path
@@ -21,10 +23,19 @@ logger = logging.getLogger(__name__)
 BACKUPS_SUBDIR = Path("backups") / "config"
 DEFAULT_KEEP = 5
 
-# Names earlier code wrote next to config.yaml (setup wizard, corrupt snapshot, xai migration).
-# Moved into the backups dir on first use so they stop accumulating in the home root; hand-named
-# copies (``config.yaml.bak-my-note``) are the user's and are never touched.
-_LEGACY_SIBLING_GLOBS = ("config.yaml.bak.[0-9]*", "config.yaml.corrupt.*.bak", "config.yaml.bak-pre-migrate-*")
+# Names earlier code wrote next to the live file (setup wizard, corrupt snapshot, xai migration,
+# post_update's per-migration copy). Moved into the backups dir on first use so they stop
+# accumulating in the home root; hand-named copies (``config.yaml.bak-my-note``) are the user's and
+# are never touched.
+_POST_UPDATE_STAMP_RE = re.compile(r"\.bak-\d{8}T\d{6}Z(?:\.\d+)?$")
+_LEGACY_SIBLING_PATTERNS = (
+    (".bak.[0-9]*", None),
+    (".corrupt.*.bak", None),
+    (".bak-pre-migrate-*", None),
+    # post_update's ``<name>.bak-<YYYYMMDD>T<HHMMSS>Z[.N]``; the glob is loose, the regex decides,
+    # so a hand-named ``config.yaml.bak-2026-09-22`` stays where the user put it.
+    (".bak-[0-9]*", _POST_UPDATE_STAMP_RE),
+)
 
 
 def backups_dir(config_path: Path) -> Path:
@@ -110,9 +121,11 @@ def load_newest_good_backup(config_path: Path) -> Optional[dict]:
 
 def _sweep_legacy_siblings(config_path: Path, root: Path) -> None:
     from hermes_cli.config import _secure_file
-    for pattern in _LEGACY_SIBLING_GLOBS:
-        for old in config_path.parent.glob(pattern):
+    for suffix, pattern in _LEGACY_SIBLING_PATTERNS:
+        for old in config_path.parent.glob(f"{config_path.name}{suffix}"):
             if not old.is_file() or old.is_symlink():
+                continue
+            if pattern is not None and not pattern.search(old.name):
                 continue
             try:
                 old.replace(root / old.name)

@@ -95,10 +95,13 @@ def test_migrate_config_restores_backup_when_version_does_not_advance(
     with pytest.raises(RuntimeError, match="did not advance"):
         step_migrate_config()
 
-    # Original content restored from the backup.
+    # Original content restored from the backup, which lives in the backups dir — not beside the
+    # live file as a `.bak-<stamp>` sibling (chk-n5va.163).
     assert config_path.read_text(encoding="utf-8") == "_config_version: 20\n"
-    backups = list(tmp_path.glob("config.yaml.bak-*"))
-    assert backups, "backup file must exist"
+    root = tmp_path / "backups" / "config"
+    backups = list(root.glob("config.yaml.pre-migrate.*"))
+    assert backups and backups[0].read_text(encoding="utf-8") == "_config_version: 20\n"
+    assert not list(tmp_path.glob("config.yaml.bak-*")), "no copy left at the home root"
 
 
 def test_boot_keeps_the_steps_before_a_failing_one_and_retries_it_each_start(
@@ -139,7 +142,9 @@ def test_boot_keeps_the_steps_before_a_failing_one_and_retries_it_each_start(
     assert raw["auxiliary"]["compression"]["model"] == "m", "v17 must not be restored away"
 
     assert boot()["migrate_config"]["failed_step"] == 21, "same revision: retried on the next start"
-    assert len(list(home.glob("config.yaml.bak-*"))) == 1, "a retry that changed nothing keeps no backup"
+    assert len(list((home / "backups" / "config").glob("config.yaml.pre-migrate.*"))) == 1, \
+        "a retry that changed nothing keeps no backup"
+    assert not list(home.glob("config.yaml.bak-*")), "migration copies never pile up in the home root"
     _drift_config_version(Finding(), False, config_path)
     assert "unhashable type" in capsys.readouterr().out, "plain doctor says why the step failed"
 
@@ -383,3 +388,33 @@ def test_migration_backups_are_owner_only_even_from_a_world_readable_source(tmp_
     assert len(backups) == 2
     for dest in backups.values():
         assert dest.stat().st_mode & 0o777 == 0o600, dest
+
+
+def test_migration_backups_are_bounded_and_leave_nothing_in_the_home_root(tmp_path, monkeypatch):
+    """Every schema migration used to add a ``<name>.bak-<stamp>`` pair to HERMES_HOME and rotate
+    nothing (chk-n5va.163). The pre-migration copies are ordinary config backups now: bounded per
+    name, deduped, and living in ``backups/config`` where the sweep keeps them out of the root."""
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: False)
+    monkeypatch.setattr("hermes_cli.config._container_or_chmod_skipped", lambda: False)
+    monkeypatch.setattr("hermes_constants.get_managed_system", lambda *a, **k: None)
+    cfg = tmp_path / "config.yaml"
+    env = tmp_path / ".env"
+    stamps = iter(f"2026010100000{i:02d}" for i in range(40))
+    monkeypatch.setattr("hermes_cli.config_backups.time.strftime", lambda _fmt: next(stamps))
+
+    for i in range(8):
+        cfg.write_text(f"_config_version: {i}\n", encoding="utf-8")
+        env.write_text(f"KEY={i}\n", encoding="utf-8")
+        assert len(post_update._backup_existing((cfg, env), keep=2)) == 2
+
+    root = tmp_path / "backups" / "config"
+    assert not [p.name for p in tmp_path.iterdir() if ".bak-" in p.name], "home root stays clean"
+    kept_cfg = sorted(root.glob("config.yaml.pre-migrate.*"))
+    kept_env = sorted(root.glob(".env.pre-migrate.*"))
+    assert len(kept_cfg) == 2 and len(kept_env) == 2, (kept_cfg, kept_env)
+    assert kept_cfg[-1].read_text(encoding="utf-8") == "_config_version: 7\n"  # pre-write state
+    assert "KEY=7" in kept_env[-1].read_text(encoding="utf-8")
+
+    # A pass whose bytes already sit in the newest copy creates no duplicate, and still restores.
+    assert len(post_update._backup_existing((cfg, env), keep=2)) == 2
+    assert len(list(root.glob("config.yaml.pre-migrate.*"))) == 2

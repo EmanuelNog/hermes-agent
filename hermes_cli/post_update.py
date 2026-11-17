@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Iterable
 
 from hermes_cli._launchers import expose_cli
+from hermes_cli.config_backups import DEFAULT_KEEP, backup_config, list_config_backups
 from hermes_cli.default_plugins import step_install_default_plugins
 from pm.paths import install_root
 
@@ -26,28 +27,38 @@ logger = logging.getLogger(__name__)
 # config migration (backup / migrate / verify / restore)
 # ---------------------------------------------------------------------------
 
-def _backup_path(path: Path, stamp: str) -> Path:
-    base = path.with_name(f"{path.name}.bak-{stamp}")
-    if not base.exists():
-        return base
-    for index in range(1, 1000):
-        candidate = path.with_name(f"{path.name}.bak-{stamp}.{index}")
-        if not candidate.exists():
-            return candidate
-    raise RuntimeError(f"could not choose a backup path for {path}")
+# The one reason the pre-schema-migration copies are filed under in backups/config; it bounds them
+# (DEFAULT_KEEP per name) instead of adding an unswept <.bak-<stamp>> pair to the home root.
+_MIGRATION_BACKUP_REASON = "pre-migrate"
 
 
-def _backup_existing(paths: Iterable[Path]) -> dict:
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+def _backup_existing(paths: Iterable[Path], *, keep: int = DEFAULT_KEEP) -> dict:
+    """Copy each source into ``backups/config`` before a schema migration.
+
+    Goes through :func:`~hermes_cli.config_backups.backup_config`, so a copy is deduped, rotated
+    (``keep`` newest per name), owner-only and swept in from any legacy sibling — this used to write
+    an unbounded ``<name>.bak-<UTCstamp>`` next to the live file instead (chk-n5va.163). A copy
+    skipped because the newest one already holds exactly these bytes still backs the restore.
+    """
     backups: dict = {}
     for path in paths:
         if not path.is_file():
             continue
-        dest = _backup_path(path, stamp)
-        shutil.copy2(path, dest)
-        from hermes_cli.config import _secure_file  # copy2 keeps the source's (possibly 0644) mode
-
-        _secure_file(dest)
+        try:
+            content = path.read_bytes()  # config-reader: ok — a file-tooling backend wrote it
+        except OSError:
+            content = None
+        newest = list_config_backups(path, _MIGRATION_BACKUP_REASON)[:1]
+        dest = backup_config(path, _MIGRATION_BACKUP_REASON, keep=keep)
+        if dest is None and newest and content is not None:
+            try:
+                if newest[0].read_bytes() == content:
+                    dest = newest[0]  # deduped: that copy IS the pre-migration state
+            except OSError:
+                pass
+        if dest is None:
+            logger.warning("no pre-migration backup of %s; a failed migration cannot restore it", path)
+            continue
         backups[path] = dest
     return backups
 
