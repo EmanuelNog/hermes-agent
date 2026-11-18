@@ -79,7 +79,6 @@
   "logging.max_size_mb",
   "mattermost.free_response_channels",
   "mattermost.require_mention",
-  "max_live_sessions",
   "mcp.auto_reload_on_config_change",
   "mcp_discovery_timeout",
   "mcp_single_query_discovery_timeout",
