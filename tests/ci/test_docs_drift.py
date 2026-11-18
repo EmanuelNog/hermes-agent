@@ -36,6 +36,17 @@ def test_no_new_undocumented_config_keys_or_slash_commands(drift, gaps):
     # prints a note and `--update` prunes the baseline whenever someone gets to it.
 
 
+def test_baseline_carries_no_already_satisfied_entries(drift, gaps):
+    # A baselined key that is already documented (or gone) buys nothing: it only lets a FUTURE
+    # regression in exactly that key pass as "baselined". The ratchet's own maintenance path
+    # (`--update`) is what keeps this empty; run it when it breaks.
+    _, stale = drift.compare(gaps, drift._load_baseline())
+    assert not any(stale.values()), (
+        "baseline entries are already documented or removed; run "
+        f"`python3 scripts/ci/check_docs_drift.py --update`: {stale}"
+    )
+
+
 def test_detects_each_documentation_form(drift, monkeypatch):
     docs = (
         "Set `agent.max_turns` to cap a run.\n"

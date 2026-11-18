@@ -61,6 +61,32 @@ def test_legacy_siblings_move_but_user_named_copies_stay(tmp_path: Path):
     assert not list(tmp_path.glob("config.yaml.bak.*")) and not list(tmp_path.glob("config.yaml.corrupt.*"))
 
 
+def test_post_update_stamp_copies_sweep_but_hand_named_dash_copies_stay(tmp_path: Path):
+    # post_update used to write `<name>.bak-<YYYYMMDD>T<HHMMSS>Z[.N]` next to the live file for
+    # every schema migration; those are the writers' copies and belong in the backups dir now.
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("model: a\n")
+    env = tmp_path / ".env"
+    env.write_text("KEY=1\n")
+    swept = ("config.yaml.bak-20261108T171037Z", "config.yaml.bak-20261108T171037Z.1",
+             ".env.bak-20261108T171037Z")
+    for name in swept:
+        (tmp_path / name).write_text("old")
+    hand_named = ("config.yaml.bak-2026-09-22", "config.yaml.bak-pre-go2", "config.yaml.bak-reasoning")
+    for name in hand_named:
+        (tmp_path / name).write_text("mine")
+
+    backup_config(cfg, "corrupt")
+    backup_config(env, "pre-migrate")
+
+    root = tmp_path / "backups" / "config"
+    for name in swept:
+        assert (root / name).is_file(), name
+        assert not (tmp_path / name).exists(), name
+    for name in hand_named:
+        assert (tmp_path / name).read_text() == "mine", name
+
+
 @pytest.mark.platforms("posix")
 def test_backup_of_world_readable_config_is_owner_only(tmp_path: Path, monkeypatch):
     # copy2 preserves the source mode; a config.yaml left 0644 by an editor must not yield a

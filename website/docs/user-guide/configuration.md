@@ -254,7 +254,7 @@ updates:
 
 `pre_update_backup` is the single pre-update safety knob: `quick` (default) snapshots critical state files (pairing data, cron jobs, config, auth; files over 1 GiB are skipped) into `state-snapshots/`; `full` additionally zips all of `HERMES_HOME` into `backups/` and can add minutes on large homes; `off` disables both. Legacy booleans are honored (`true` → `full`, `false` → `off`).
 
-Point-in-time copies of `config.yaml` itself (taken before `hermes setup` rewrites it, before `hermes migrate` edits it, every time the file parses successfully, and when it fails to parse) go to `backups/config/config.yaml.<reason>.<timestamp>`. Identical repeats are skipped and only the newest five per reason are kept, so they never pile up beside `config.yaml`. If `config.yaml` is broken, Hermes serves the newest `good` copy instead of built-in defaults and warns on every start until the YAML is fixed; the broken file is never modified.
+Point-in-time copies of `config.yaml` itself (taken before `hermes setup` rewrites it, before `hermes migrate` edits it, before a config-schema migration runs, every time the file parses successfully, and when it fails to parse) go to `backups/config/config.yaml.<reason>.<timestamp>`; the pre-migration copy of `.env` that belongs with one lands beside it as `.env.pre-migrate.<timestamp>`. Identical repeats are skipped and only the newest five per reason are kept, so they never pile up beside `config.yaml`. If `config.yaml` is broken, Hermes serves the newest `good` copy instead of built-in defaults and warns on every start until the YAML is fixed; the broken file is never modified. Copies older writers left beside the live file (`config.yaml.bak.<…>`, `config.yaml.bak-<UTCstamp>`, `.env.bak-<UTCstamp>`) are moved into `backups/config/` on the next run; hand-named copies such as `config.yaml.bak-my-note` are yours and stay put.
 
 For git installs, Hermes auto-stashes dirty tracked files, plus any untracked file at a path the update adds, before checking out the update branch or pulling. Untracked files the update never writes stay in place. Interactive terminal updates ask whether to keep the changes before stashing anything; answering no deletes them instead of leaving a stash entry behind. Non-interactive updates (desktop/chat app, gateway, or `--yes`) use `updates.non_interactive_local_changes`: `stash` restores local source edits after a successful pull, while `discard` drops the update-created stash after a successful pull. Use `discard` only on managed installs where local source edits are never meant to persist.
 
@@ -2387,6 +2387,7 @@ display:
   streaming: false        # Stream tokens to terminal as they arrive (real-time output)
   show_cost: false        # Show estimated $ cost in the CLI status bar
   vim_mode: false         # CLI only: vi/vim keybindings in the input composer (Esc → NORMAL, i → INSERT). The live NORMAL/INSERT/REPLACE mode shows at the right of the status bar. Config-only, read at startup.
+  tui_scroll_speed: 1     # TUI: wheel rows per notch BEFORE acceleration (default 1, clamped to 20). Raise it on a slow mouse or a low-notch trackpad; applied live from config, while an explicit HERMES_TUI_SCROLL_SPEED in the launch env still wins.
   timestamps: false       # When true, prefixes user and assistant labels with timestamps in the CLI / TUI transcript
   timestamp_format: "%H:%M"  # strftime format for those timestamps (e.g. "%b-%d %H:%M" for month-day)
   tool_preview_length: 0  # Max chars for tool call previews (0 = no limit, show full paths/commands)
@@ -2689,6 +2690,21 @@ Provider behavior:
 - `local` uses `faster-whisper` running on your machine. Install it separately with `python -c "import pm; pm.sync_venv(['stt-whisper'], explicit=True)"`. Silence-hallucination hardening is on by default: a Silero VAD filter keeps silence/noise from ever reaching Whisper, cross-window conditioning is disabled, and segments the model itself flags as probably-not-speech *and* low-confidence are dropped. Set `stt.local.vad: false` to transcribe non-speech audio (music, ambient) with the raw behavior. The model stays loaded in memory between voice messages for low-latency transcription; set `stt.local.unload_after_idle_seconds` (e.g. `300` for 5 minutes) to automatically release the model when idle. This frees GPU memory on CUDA hosts (the main win when a local LLM shares the GPU); on CPU the memory becomes reusable by the process, though the OS-visible footprint may not shrink until the process needs the space for something else. The next voice message reloads the model transparently.
 - `groq` uses Groq's Whisper-compatible endpoint and reads `GROQ_API_KEY`. Set `stt.groq.language` or `stt.language` to pin a hint; `HERMES_LOCAL_STT_LANGUAGE` is used only when both are empty.
 - `openai` uses the OpenAI speech API and reads `VOICE_TOOLS_OPENAI_KEY`.
+
+**Local speaker diarization.** Set `stt.local.diarize: true` to label who spoke when, fully offline, with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — the free counterpart of `stt.elevenlabs.diarize`. The transcript becomes `SPEAKER_00: …` per turn and the result carries per-segment speaker data. It needs sherpa-onnx installed (`pm install wake-sherpa`) plus two ONNX models in the directory named by `stt.local.diarize_model_dir` (default `<hermes home>/models/sherpa-speaker`): a pyannote segmentation model at `*/model.onnx`, and a speaker-embedding file (`eres2net_en.onnx` or `3dspeaker_speech_eres2net_base_sv_zh-cn.onnx`). Diarization is always best-effort: if sherpa-onnx, ffmpeg or either model file is missing, transcription still succeeds and the result carries a `diarize_error` string instead of speakers.
+
+```yaml
+stt:
+  provider: local
+  local:
+    diarize: true
+    # diarize_model_dir: ""        # "" = <hermes home>/models/sherpa-speaker
+    # diarize_num_speakers: -1     # -1 = infer the count; set 2 when you know it is a two-person call
+    # diarize_threshold: 0.5       # clustering threshold; higher merges more voices into one speaker
+    # diarize_num_threads: 2       # ORT threads for the speaker-embedding extractor
+```
+
+`stt.local.diarize_num_speakers` fixes the cluster count (`-1` infers it), `stt.local.diarize_threshold` decides how close two voices must be to count as the same speaker, and `stt.local.diarize_num_threads` sizes the embedding extractor — leave it at `2` unless a long recording is CPU-bound.
 
 Cloud providers (groq, openai, mistral, xai, elevenlabs, deepinfra) get a **pre-upload silence trim** by default when `ffmpeg` is installed: long pauses in a voice note are collapsed client-side before the file uploads, keeping `cloud_trim_keep_ms` of each pause so natural pacing survives. Shorter audio means faster uploads, lower per-audio-minute billing, and fewer silence hallucinations from the remote model. Clips shorter than 12 seconds skip the trim entirely (savings can't matter there, and several providers bill a per-request minimum anyway). The trim is best-effort — if ffmpeg is missing, the trim fails, the clip is mostly silence, or trimming would save less than ~10%, the original file is uploaded untouched. Set `stt.cloud_trim_silence: false` to always upload the original (e.g. when transcribing music or ambient audio through a cloud provider). Command-type and plugin providers never get trimmed audio.
 
