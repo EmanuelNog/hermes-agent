@@ -7,6 +7,7 @@ import type { GatewayClient } from '../gatewayClient.js'
 import { syncTuiLocale } from '../i18n/loader.js'
 import { t } from '../i18n/runtime.js'
 import { DEFAULT_VOICE_RECORD_KEY, type ParsedVoiceRecordKey, parseVoiceRecordKey } from '../lib/platform.js'
+import { $programStatusEnabled } from '../lib/programStatus.js'
 import { asRpcResult } from '../lib/rpc.js'
 import { setScrollSpeedBase } from '../lib/wheelAccel.js'
 
@@ -331,6 +332,11 @@ export const applyDisplay = (
   setBell(!!d.bell_on_complete)
 
   setBellOnPrompt?.(!!d.bell_on_prompt)
+
+  // A failed read (cfg null) keeps the last known setting.
+  if (cfg?.config) {
+    $programStatusEnabled.set(d.program_status !== false)
+  }
 
   // Rows per wheel notch before acceleration (`display.tui_scroll_speed`); a config edit reaches the
   // live accel state on the next wheel event.
