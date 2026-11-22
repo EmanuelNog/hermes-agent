@@ -63,9 +63,9 @@ def gateway_cell(name):
     return "refused"
 
 
-# Reads a TUI session gets as main's TUI sidecar rendered them (gateway/session_tui_reads.py).
+# Reads a TUI session gets from gateway/session_tui_reads.py instead of the gateway's handler.
 TUI_READS = {"status": "TUI session: main's `Hermes TUI Status`",
-             "context": "TUI session: main's live /context with the category table"}
+             "context": "TUI session: the classic CLI's /context (grid + category table + context files)"}
 
 
 def port_note(cmd):

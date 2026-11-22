@@ -1,23 +1,23 @@
-"""Main's TUI text for the session reads its sidecar answered itself: /status, /context.
+"""A TUI session's /status, /context and /cron, on the shared owner.
 
-On main the TUI's ``slash.exec`` never reached the messaging gateway's handlers: ``/status`` was
-``session.status`` (``Hermes TUI Status``), ``/context`` was ``_format_live_context_output`` (the
-conversation counts, then the desktop gauge's category table). A TUI session on the shared owner
-gets the same lines here, read from the owner's live agent and stored row; every other surface keeps
-the gateway's own handlers (``gateway/session_commands.py``). ``/cron``, the classic CLI's handler
-that main's TUI ran in its slash worker, is gateway/session_cron_commands.py.
+``/status`` is main's TUI sidecar text (``session.status``, ``Hermes TUI Status``); ``/context`` is the
+classic CLI's own body (``cli_info_mixin._show_context_breakdown``: the ``🧠 Context Usage`` header, the
+100-cell glyph grid, the category table, the window/source/prompt-cache lines and the context-file
+manifest) — main's TUI drew conversation counts instead, so the two surfaces disagreed. Both read the
+owner's live agent and stored row; every other surface keeps the gateway's own handlers
+(``gateway/session_commands.py``). ``/cron``, the classic CLI's handler that main's TUI ran in its slash
+worker, is gateway/session_cron_commands.py.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections import Counter
 from pathlib import Path
 
 from gateway.session_persistence import authority_persistence
 from persistence.conversation.messages import ConversationRequest
 
-# The TUI surfaces whose /status and /context read as main's TUI sidecar did.
+# The TUI surfaces whose /status and /context are answered by this module instead of the gateway's.
 _TUI_SOURCES = frozenset({'tui'})
 
 
@@ -79,45 +79,54 @@ def _status(authority, ref, live, policy, agent, arg) -> str:
 
 
 def _context(authority, ref, live, policy, agent, arg) -> str:
-    """Main's ``_format_live_context_output``: counts by role, model/provider, then the category
-    table off the live agent (``render_context_breakdown_lines(grid=False)``), else the stored usage."""
-    stored = _context_id(authority, ref)
-    rows = []
-    with contextlib.suppress(Exception):
-        rows = [m.as_openai_message() for m in authority_persistence(authority).messages.read_conversation(
-            stored, ConversationRequest(include_lineage=True, include_row_ids=True))]
-    from gateway.session_controls import display_projection
-    messages = display_projection(rows, authority.profile_id) if rows else []
-    breakdown: list[str] = []
+    """The classic CLI's ``/context`` body for a TUI session (``cli_info_mixin._show_context_breakdown``):
+    the ``🧠 Context Usage — <model>`` header, the 100-cell glyph grid, the estimated category table,
+    the window/source/prompt-cache lines and the context-file manifest — not main's TUI counts.
+
+    Read exactly as the CLI reads it: the live agent's breakdown over its compression tip's model
+    history; a session with no resident agent falls back to what it froze (``_stored_payload``, the
+    figures ``session.context_breakdown`` serves agentless) and, failing that, the CLI's own
+    "no active agent" line."""
+    from agent.context_breakdown import (
+        compute_context_details, compute_session_context_breakdown, render_context_breakdown_lines)
+    from agent.context_file_sources import context_file_sources_for_agent, render_context_file_lines
+    from agent.i18n import t
+    store = authority_persistence(authority)
+    tip = _context_id(authority, ref)
+    expanded = arg.strip().lower() in {'all', 'full', 'details'}
+    payload: dict = {}
+    details = None
+    sources: list = []
     if agent is not None:
         with contextlib.suppress(Exception):
-            from agent.context_breakdown import (
-                compute_context_details, compute_session_context_breakdown, render_context_breakdown_lines)
-            payload = compute_session_context_breakdown(agent, _model_history(authority_persistence(authority), stored))
-            details = None
-            if arg.strip().lower() in {'all', 'full', 'details'}:
+            payload = compute_session_context_breakdown(agent, _model_history(store, tip))
+            with contextlib.suppress(Exception):
+                sources = context_file_sources_for_agent(agent)
+            if expanded:
                 with contextlib.suppress(Exception):
                     details = compute_context_details(agent)
-            breakdown = render_context_breakdown_lines(payload, details=details, grid=False)
-    lines = [f'Conversation: {len(messages)} messages' if messages else 'Conversation is empty (no messages yet).']
-    roles = Counter(str(msg.get('role') or 'unknown') for msg in messages)
-    lines.append('  ' + ', '.join(f'{r}: {roles.get(r, 0)}' for r in ('user', 'assistant', 'tool', 'system')))
-    if model := (getattr(agent, 'model', '') if agent is not None else '') or policy.current_model(authority):
-        lines.append(f'Model: {model}')
-    # Main read the provider off the compute-host metadata mirror, which a local session never
-    # filled, so its TUI always printed ``auto`` here; kept as main's text.
-    lines.append('Provider: auto')
-    if breakdown:
-        return '\n'.join([*lines, '', *breakdown])
-    compressor = getattr(agent, 'context_compressor', None) if agent is not None else None
-    used, maximum = (int(getattr(compressor, name, 0) or 0) for name in ('last_prompt_tokens', 'context_length'))
-    if used and maximum:
-        lines.append(f'Context usage: {used:,} / {maximum:,} tokens ({used / maximum * 100:.1f}%)')
-    elif used:
-        lines.append(f'Context usage: {used:,} tokens')
-    if count := int(getattr(compressor, 'compression_count', 0) or 0):
-        lines.append(f'Compressions: {count:,}')
-    return '\n'.join(lines)
+    if not payload.get('categories'):
+        payload = _stored_payload(store, tip)
+    if not payload.get('categories'):
+        return t('cli.shared.no_active_agent')
+    model = (payload.get('model') or (getattr(agent, 'model', '') if agent is not None else '')
+             or policy.current_model(authority) or '?')
+    file_lines = render_context_file_lines(sources)
+    return '\n'.join([t('cli.context.header', model=model), '',
+                      *render_context_breakdown_lines(payload, details=details, grid=True),
+                      *(['', *file_lines] if file_lines else [])])
+
+
+def _stored_payload(store, tip) -> dict:
+    """The categories of a session with no resident agent: its row's frozen system prompt measured
+    against its pinned tool schemas (``stored_context_breakdown``), ``{}`` when no prompt was ever
+    built. Stored usage is deliberately not folded in: the window block stays off rather than
+    printing a gauge the CLI never had."""
+    with contextlib.suppress(Exception):
+        row = store.sessions.get(tip)
+        if row is not None and row.system_prompt:
+            return _stored_breakdown(row, _model_history(store, tip), {}, tip=tip, store=store)
+    return {}
 
 
 async def run_tui_read(authority, ref, live, policy, render, arg) -> dict:

@@ -246,54 +246,86 @@ def _format_live_history_output(sid: str, session: dict, arg: str) -> str:
     return "\n".join(lines)
 
 
-def _format_live_context_output(sid: str, session: dict, arg: str) -> str:
-    from collections import Counter
+def _live_context_breakdown(session: dict, arg: str) -> tuple[Optional[dict], list[str]]:
+    """``(payload, rendered lines)`` off the live agent — the CLI's own view (``grid=True``: the 100-cell
+    glyph, the category table, the window/source/prompt-cache lines). ``(None, [])`` when the session
+    has no agent or the computation raised; the caller then falls back to the persisted state."""
+    agent = session.get("agent")
+    if agent is None:
+        return None, []
+    with session["history_lock"]:
+        live_messages = list(session.get("history", []))
     try:
-        messages = _history_to_messages(_live_session_messages(session) or [], profile_home=session.get("profile_home"))
+        # Bind the session context: on the RPC thread the session cwd is unset, so the
+        # prompt build inside would key its workspace pin on the backend's cwd.
+        tokens = _set_session_context(session["session_key"], cwd=_session_cwd(session))
+        try:
+            from agent.context_breakdown import (
+                compute_context_details,
+                compute_session_context_breakdown,
+                render_context_breakdown_lines)
+            payload = compute_session_context_breakdown(agent, live_messages)
+            details = None
+            if (arg or "").strip().lower() in {"all", "full", "details"}:
+                with contextlib.suppress(Exception):
+                    details = compute_context_details(agent)
+            return payload, render_context_breakdown_lines(payload, details=details, grid=True)
+        finally:
+            _clear_session_context(tokens)
+    except Exception:
+        return None, []
+
+
+def _live_context_file_lines(session: dict) -> list[str]:
+    """The CLI's ``Context files`` manifest, discovered in the session's own cwd."""
+    agent = session.get("agent")
+    if agent is None:
+        return []
+    from agent.context_file_sources import context_file_sources_for_agent, render_context_file_lines
+    # RPC thread: bind the session cwd or the discovery walk keys on the backend's cwd, not the workspace.
+    tokens = _set_session_context(session["session_key"], cwd=_session_cwd(session))
+    try:
+        return render_context_file_lines(context_file_sources_for_agent(agent))
+    except Exception:
+        return []
+    finally:
+        _clear_session_context(tokens)
+
+
+def _format_live_context_output(sid: str, session: dict, arg: str) -> str:
+    """The classic CLI's ``/context`` body (``cli_info_mixin._show_context_breakdown``): the
+    ``🧠 Context Usage — <model>`` header, the 100-cell glyph grid, the estimated category table, the
+    window/source/prompt-cache lines and the context-file manifest.
+
+    Main's sidecar drew conversation counts here instead, so a TUI session and ``hermes`` reported
+    different things for the same session. Agentless (idle/resumed) sessions, which the CLI answers
+    with "no active agent", keep the persisted-state view: a stored usage row is still more than the
+    CLI has to say at that point."""
+    payload, breakdown_lines = _live_context_breakdown(session, arg)
+    file_lines = _live_context_file_lines(session)
+    if payload is not None and breakdown_lines:
+        from agent.i18n import t
+        return "\n".join([t("cli.context.header", model=payload.get("model") or "?"), "",
+                          *breakdown_lines, *(["", *file_lines] if file_lines else [])])
+
+    usage = _session_usage_snapshot(session)
+    mirror = _metadata_mirror(session)
+    try:
+        messages = _history_to_messages(_live_session_messages(session) or [],
+                                        profile_home=session.get("profile_home"))
     except Exception:
         messages = []  # malformed db rows fall back to the live history below
     if not messages:
         with session["history_lock"]:
-            messages = _history_to_messages(list(session.get("history", [])), profile_home=session.get("profile_home"))
-
-    breakdown_lines: list[str] = []
-    if (agent := session.get("agent")) is not None:
-        # Live agent: the desktop gauge's engine (agent.context_breakdown) —
-        # full Cursor-style breakdown, provider-anchored, no provider calls.
-        # `all` expands per-skill / per-toolset costs, matching the CLI.
-        with session["history_lock"]:
-            live_messages = list(session.get("history", []))
-        try:
-            # Bind the session context: on the RPC thread the session cwd is unset, so the
-            # prompt build inside would key its workspace pin on the backend's cwd.
-            tokens = _set_session_context(session["session_key"], cwd=_session_cwd(session))
-            try:
-                from agent.context_breakdown import (
-                    compute_context_details,
-                    compute_session_context_breakdown,
-                    render_context_breakdown_lines)
-                payload = compute_session_context_breakdown(agent, live_messages)
-                details = None
-                if (arg or "").strip().lower() in {"all", "full", "details"}:
-                    with contextlib.suppress(Exception):
-                        details = compute_context_details(agent)
-                breakdown_lines = render_context_breakdown_lines(payload, details=details, grid=False)
-            finally:
-                _clear_session_context(tokens)
-        except Exception:
-            breakdown_lines = []  # fall back to the persisted-state view below
-
-    usage = _session_usage_snapshot(session)
-    mirror = _metadata_mirror(session)
+            messages = _history_to_messages(list(session.get("history", [])),
+                                            profile_home=session.get("profile_home"))
+    from collections import Counter
     lines = [f"Conversation: {len(messages)} messages" if messages else "Conversation is empty (no messages yet)."]
     roles = Counter(str(msg.get("role") or "unknown") for msg in messages)
     lines.append("  " + ", ".join(f"{r}: {roles.get(r, 0)}" for r in ("user", "assistant", "tool", "system")))
     if model := mirror.get("model") or usage.get("model") or "":
         lines.append(f"Model: {model}")
     lines.append(f"Provider: {mirror.get('provider') or 'auto'}")
-    if breakdown_lines:
-        lines.extend(["", *breakdown_lines])
-        return "\n".join(lines)
     context_used = int(usage.get("context_used") or 0)
     mark = "~" if usage.get("context_estimated") else ""
     context_max = int(usage.get("context_max") or 0)
@@ -304,16 +336,8 @@ def _format_live_context_output(sid: str, session: dict, arg: str) -> str:
         lines.append(f"Context usage: {mark}{context_used:,} tokens")
     if usage.get("compressions"):
         lines.append(f"Compressions: {int(usage.get('compressions') or 0):,}")
-    if (agent := session.get("agent")) is not None:
-        from agent.context_file_sources import context_file_sources_for_agent, render_context_file_lines
-        # RPC thread: bind the session cwd or the discovery walk keys on the backend's cwd, not the workspace.
-        tokens = _set_session_context(session["session_key"], cwd=_session_cwd(session))
-        try:
-            file_lines = render_context_file_lines(context_file_sources_for_agent(agent))
-        finally:
-            _clear_session_context(tokens)
-        if file_lines:
-            lines += [""] + file_lines
+    if file_lines:
+        lines += [""] + file_lines
     return "\n".join(lines)
 
 

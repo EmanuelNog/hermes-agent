@@ -1,12 +1,14 @@
-"""A TUI session's /status, /context and /cron on the shared owner read as main's TUI sidecar did;
-every local session's /cron reads run main's handler on the owner, and its writes run there only when
-the classic CLI sends them on its own command socket (a viewer's connection keeps main's refusal).
+"""A TUI session's /status, /context and /cron on the shared owner: /status is main's TUI sidecar
+text, /context is the classic CLI's own body (the two used to disagree), and /cron reads run main's
+handler on the owner — its writes run there only when the classic CLI sends them on its own command
+socket (a viewer's connection keeps main's refusal).
 
-Main's TUI answered these itself (``session.status``: ``Hermes TUI Status``; ``/context``:
-``_format_live_context_output`` with the category table; ``/cron``: the classic CLI's overview in
-the slash worker). Through the owner a TUI session got the messaging gateway's markdown instead
-(FINDINGS rows 17 / 19 / 21). Other surfaces keep the gateway's handlers.
+Through the owner a TUI session got the messaging gateway's markdown instead (FINDINGS rows 17 / 19 /
+21); main's TUI drew /context as conversation counts where the classic CLI draws the glyph grid, the
+category table and the context-file manifest. Other surfaces keep the gateway's handlers.
 """
+import contextlib
+import io
 from types import SimpleNamespace
 
 import pytest
@@ -75,29 +77,72 @@ async def test_tui_status_names_the_custom_entry_a_bare_custom_agent_runs_on(own
     assert 'Model: deepseek-v4.1-flash (custom:deepseek)' in await _exec(owner, sid, 'status')
 
 
-@pytest.mark.asyncio
-async def test_tui_context_is_main_live_context(owner):
-    sid = (await owner.call('session.create', request_id='t', source='tui', cwd=str(owner.workdir)))['session_id']
-    out = await _exec(owner, sid, 'context')
-    assert out.splitlines()[:4] == ['Conversation is empty (no messages yet).',
-                                    '  user: 0, assistant: 0, tool: 0, system: 0',
-                                    'Model: fake-model', 'Provider: auto'], out
-    assert 'Context Window' not in out
+_PAYLOAD = {
+    'categories': [{'id': 'system_prompt', 'label': 'System prompt', 'tokens': 3000, 'color': '#fff'},
+                   {'id': 'conversation', 'label': 'Conversation', 'tokens': 4000, 'color': '#eee'}],
+    'context_max': 128000, 'context_used': 7000, 'context_percent': 5, 'estimated_total': 7000,
+    'context_estimated': False, 'context_source': 'provider_usage', 'model': 'fake-model'}
+
+
+def _classic_cli_body(agent, model):
+    """What the classic CLI's /context prints for *agent*, as lines (its own 2-space margin removed)."""
+    from hermes_cli.cli_info_mixin import CLIInfoMixin
+
+    class _ClassicCLI(CLIInfoMixin):  # the mixin's own method, over the two attributes it reads
+        def __init__(self):
+            self.agent, self.conversation_history, self.model = agent, [], model
+            self._session_db, self._gateway_session_open = None, False
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _ClassicCLI()._show_context_breakdown('context')
+    lines = [line.removeprefix('  ') for line in buffer.getvalue().splitlines()]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return lines
 
 
 @pytest.mark.asyncio
-async def test_tui_context_with_a_live_agent_renders_the_category_table(owner, monkeypatch):
+async def test_tui_context_without_an_agent_answers_the_classic_cli_line(owner):
+    from agent.i18n import t
     sid = (await owner.call('session.create', request_id='t', source='tui', cwd=str(owner.workdir)))['session_id']
+    assert await _exec(owner, sid, 'context') == t('cli.shared.no_active_agent')
+
+
+@pytest.mark.asyncio
+async def test_tui_context_with_a_live_agent_draws_the_classic_cli_grid_and_table(owner, monkeypatch):
     from agent import context_breakdown
+    from agent.i18n import t
+    sid = (await owner.call('session.create', request_id='t', source='tui', cwd=str(owner.workdir)))['session_id']
     agent = SimpleNamespace(model='fake-model', provider='custom')
     owner.authority.runner._cached_agent_for = lambda route: agent
-    monkeypatch.setattr(context_breakdown, 'compute_session_context_breakdown', lambda a, m: {
-        'categories': [{'id': 'system', 'label': 'System prompt', 'tokens': 3000, 'color': '#fff'}],
-        'context_max': 128000, 'context_used': 120, 'context_percent': 0, 'estimated_total': 3000,
-        'context_estimated': False, 'context_source': 'provider_usage', 'model': 'fake-model'})
+    monkeypatch.setattr(context_breakdown, 'compute_session_context_breakdown', lambda a, m: dict(_PAYLOAD))
     out = await _exec(owner, sid, 'context')
+    lines = out.splitlines()
+    assert lines[0] == t('cli.context.header', model='fake-model'), out
+    assert len(lines[2].split()) == 20 and len(lines[6].split()) == 20, out  # 5x20 glyph grid
     assert 'Estimated usage by category' in out and 'System prompt' in out, out
-    assert out.splitlines()[0] == 'Conversation is empty (no messages yet).'
+    # The counts header main's TUI printed is gone — the CLI never had it.
+    assert 'Conversation is empty' not in out and 'Provider: auto' not in out, out
+
+
+@pytest.mark.asyncio
+async def test_tui_context_is_byte_for_byte_the_classic_cli_body(owner, monkeypatch):
+    """The regression: /context on a TUI session presented different info than `hermes` (conversation
+    counts instead of the CLI's grid/table/context files). Both surfaces must now render the same body
+    from the same breakdown payload."""
+    from agent import context_breakdown, context_file_sources
+    sid = (await owner.call('session.create', request_id='t', source='tui', cwd=str(owner.workdir)))['session_id']
+    agent = SimpleNamespace(model='fake-model', provider='custom')
+    owner.authority.runner._cached_agent_for = lambda route: agent
+    monkeypatch.setattr(context_breakdown, 'compute_session_context_breakdown', lambda a, m: dict(_PAYLOAD))
+    monkeypatch.setattr(context_file_sources, 'context_file_sources_for_agent', lambda a: [
+        {'label': 'AGENTS.md', 'status': 'loaded', 'est_tokens': 812}])
+    tui = (await _exec(owner, sid, 'context')).splitlines()
+    assert tui == _classic_cli_body(agent, 'fake-model'), tui
+    assert 'Context files' in tui and 'AGENTS.md' in '\n'.join(tui), tui
 
 
 @pytest.mark.asyncio
