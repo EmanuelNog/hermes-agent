@@ -91,7 +91,9 @@ async def prepare_compress(authority, live, payload, prepared):
                 custom_providers=config.get('custom_providers'))
             # Bind the transcript being compacted: cooldowns round-trip, and the summary call's
             # spend is recorded against it (a mutation runs on a worker thread, outside any turn).
-            compressor.bind_session_state(authority.db, snapshot['target'])
+            # The authority's storage handle is `persistence` — SessionAuthority has no `.db`;
+            # a built-in compressor binds that same handle (context_engine_session_db returns it).
+            compressor.bind_session_state(store, snapshot['target'], persistence=store)
             compressed = compressor.compress(json.loads(json.dumps(head)), force=True,
                                                focus_topic=request.focus_topic, memory_context=memory_context)
             if not any(m.get('_compressed_summary') for m in compressed):
