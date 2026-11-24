@@ -381,3 +381,35 @@ describe('submissionCore.submitPrompt — typed voice stop on the shared gateway
     expect(getUiState().status).toBe('running…')
   })
 })
+
+describe('br-gx5.126 — a turn longer than the RPC deadline is not a failure', () => {
+  beforeEach(() => {
+    resetUiState()
+    patchUiState({ sid: 'sess-1' })
+  })
+
+  it('a slow admission delivers its reply with no timeout line', async () => {
+    let resolveSubmit: (v: unknown) => void = () => {}
+    const pending = new Promise(res => {
+      resolveSubmit = res
+    })
+    const sys = vi.fn()
+    const gw = {
+      request: vi.fn((method: string) =>
+        method === 'input.detect_drop' ? Promise.resolve({ matched: false }) : pending
+      )
+    } as unknown as GatewayClient
+
+    const done = submitPrompt('slow turn', makeDeps(gw, { sys }))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // Nothing may claim the turn failed while it is still running.
+    expect(sys.mock.calls.flat().join(' ')).not.toMatch(/did not answer|timed out/i)
+
+    resolveSubmit({ status: 'streaming' })
+    await done
+
+    expect(sys.mock.calls.flat().join(' ')).not.toMatch(/did not answer|timed out/i)
+  })
+})

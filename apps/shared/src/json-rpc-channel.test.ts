@@ -58,6 +58,35 @@ describe('JsonRpcRequestChannel', () => {
     expect(events).toEqual([])
   })
 
+  it('a turn-length method carries NO deadline, while other methods keep theirs', async () => {
+    vi.useFakeTimers()
+
+    try {
+      const channel = new JsonRpcRequestChannel({ requestIdPrefix: 't', requestTimeoutMs: 60_000 })
+      const { transport, last } = spyTransport()
+
+      channel.attach(transport)
+
+      // br-gx5.126: the reply of a turn arrives when the TURN ends. Ten minutes is a slow turn,
+      // not a failure — the TUI aborted at 120 s and then rendered the answer anyway.
+      const turn = channel.request('prompt.submit', { text: 'slow' })
+      const turnId = last().id
+
+      await vi.advanceTimersByTimeAsync(600_000)
+      channel.handleFrame(JSON.stringify({ id: turnId, jsonrpc: '2.0', result: { status: 'streaming' } }))
+      await expect(turn).resolves.toEqual({ status: 'streaming' })
+
+      // The exemption is per method, not a global loosening.
+      const short = expect(channel.request('session.stats', {})).rejects.toThrow(
+        'request timed out after 60s: session.stats'
+      )
+      await vi.advanceTimersByTimeAsync(60_000)
+      await short
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('detach fails every in-flight call and a per-call timeout names the method', async () => {
     vi.useFakeTimers()
 

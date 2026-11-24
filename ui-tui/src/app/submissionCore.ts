@@ -300,6 +300,12 @@ async function submitLegacy(
     item.legacyAttempted = true
     savePendingInput(item)
 
+    // br-gx5.126: this RPC can legitimately hold for the WHOLE turn (a queued admission waits
+    // for the running turn to finish). The fixed 120 s deadline printed "Hermes did not answer
+    // within 120s" on a 292 s turn and then delivered the answer anyway — an invitation to
+    // retry and pay twice. The deadline is now waived for turn-length methods by the transport
+    // itself (TURN_LENGTH_METHODS in apps/shared/src/json-rpc-channel.ts), so every client of
+    // `prompt.submit` gets the same rule instead of each call site remembering it.
     const r = await deps.gw.request<PromptSubmitResponse>('prompt.submit', {
       session_id: sid,
       text: item.preparedText ?? submitText,

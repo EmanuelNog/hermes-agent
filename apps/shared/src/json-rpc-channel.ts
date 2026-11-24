@@ -169,6 +169,11 @@ interface PendingCall {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
+
+/** Methods that answer when a TURN ends (br-gx5.126). A fixed RPC deadline is wrong for them:
+ *  the work is still running, the reply will arrive, and aborting the wait makes the client
+ *  report a failure it then contradicts by rendering the answer. */
+const TURN_LENGTH_METHODS: ReadonlySet<string> = new Set(['prompt.submit', 'session.prompt'])
 // Keepalive + dead-connection detection. A silent drop (macOS sleep, proxy
 // idle timeout, VPN reconnect) kills the TCP socket without a `close` event,
 // so the client hangs forever (issue #32997). Browser/undici WebSocket does
@@ -296,6 +301,14 @@ export class JsonRpcRequestChannel {
     signal?: AbortSignal,
     notConnectedError: () => Error = () => new Error('gateway not connected')
   ): Promise<T> {
+    // br-gx5.126: some methods answer when a TURN ends, not when an acknowledgement does.
+    // A fixed client deadline there aborts a call that is working: the TUI printed
+    // "did not answer within 120s" at 120 s of a 292 s turn and then received the answer
+    // anyway — an invitation to retry and pay twice. No timer for those methods; the call
+    // settles on the reply, on abort, or when the transport closes.
+    if (TURN_LENGTH_METHODS.has(method)) {
+      timeoutMs = 0
+    }
     const transport = this.transport
 
     if (!transport) {
