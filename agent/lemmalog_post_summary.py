@@ -77,7 +77,12 @@ def maybe_capture_after_summary(
 ) -> Optional[Path]:
     """Write the second-turn payload and spawn the extractor; ``None`` when the switch is off."""
     if not enabled() or not (summary or "").strip() or not session_id:
+        if enabled():
+            logger.info("lemmalog post-summary skipped: enabled but session_id=%r summary_chars=%s",
+                        session_id, len(summary or ""))
         return None
+    logger.info("lemmalog post-summary: capturing for session=%s summary_chars=%s",
+                session_id, len(summary or ""))
     try:
         script = script_path()
         if not script.is_file():
