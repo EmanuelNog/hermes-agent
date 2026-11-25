@@ -19,7 +19,7 @@ import pytest
 
 from agent import prepared_compaction as pc
 from agent.context_compressor import COMPRESSED_SUMMARY_METADATA_KEY, ContextCompressor
-from tools.tool_result_storage import ARCHIVE_LIST_HEADING, ARCHIVE_POINTER_SEP
+from tools.tool_result_storage import ARCHIVE_POINTER_SEP
 from agent.prepared_compaction import PreparedCompaction
 from agent.conversation_compression_manual import CompressRequest, compress_now
 
@@ -88,16 +88,8 @@ def _originals(msgs):
 
 
 def _archived(home) -> list[Path]:
-    """Archive files only: the session index is a reference, not an archived result."""
     d = home / "cache" / "pruned"
-    if not d.exists():
-        return []
-    return sorted(p for p in d.iterdir() if not p.name.endswith(".index.jsonl"))
-
-
-def _index_file(home) -> Path:
-    (index,) = [p for p in (home / "cache" / "pruned").iterdir() if p.name.endswith(".index.jsonl")]
-    return index
+    return sorted(d.iterdir()) if d.exists() else []
 
 
 def _archived_dir() -> list[Path]:
@@ -137,11 +129,7 @@ def test_the_summarizer_reads_original_results_and_archives_land_only_after_the_
     files = _archived(home)
     assert files and {f.read_bytes() for f in files} <= {b.encode("utf-8") for b in originals.values()}
     committed = "\n".join(str(m.get("content")) for m in compressed)
-    # One reference keeps them all: the summary names the session index, whose rows name each archive.
-    index = _index_file(home)
-    assert f"cache/pruned/{index.name}" in committed
-    assert {Path(json.loads(line)["path"]).name for line in index.read_text().splitlines()} == {
-        f.name for f in files}
+    assert all(f"cache/pruned/{f.name}" in committed for f in files)  # every archive stays reachable
     _assert_pointers_name_byte_exact_originals(home, originals, compressed)
 
 
@@ -341,10 +329,7 @@ def test_compaction_archives_small_string_results(home, summarizer, body):
     compressed = c.compress(msgs, current_tokens=c.threshold_tokens + 1)
     files = _archived(home)
     assert any(p.read_bytes() == body.encode("utf-8") for p in files)
-    index = _index_file(home)
-    assert f"cache/pruned/{index.name}" in str(compressed)
-    assert {Path(json.loads(line)["path"]).name for line in index.read_text().splitlines()} == {
-        p.name for p in files}
+    assert all(f"cache/pruned/{p.name}" in str(compressed) for p in files)
 
 
 def test_a_summarized_result_whose_archive_write_fails_is_reported(home):
@@ -355,40 +340,3 @@ def test_a_summarized_result_whose_archive_write_fails_is_reported(home):
         projected, count, written, failed = _compressor()._offload_window_results(msgs, 0, len(msgs))
     assert (count, written, failed) == (0, [], 1)
     assert projected[1]["content"] == msgs[1]["content"]  # the row itself is never stubbed without a file
-
-
-def test_a_summarizer_that_copies_an_earlier_list_does_not_stack_a_second(home):
-    """A model echoing the previous handoff's block must not make the summary name it twice."""
-    c = _compressor()
-    carried = ("## Goal\nread the files.\n\n" + ARCHIVE_LIST_HEADING
-               + "\n- ~/.hermes/cache/pruned/s1.index.jsonl\n")
-    response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.content = carried
-    with patch("agent.context_compressor.call_llm", return_value=response):
-        compressed = c.compress(_transcript(), current_tokens=c.threshold_tokens + 1)
-
-    (summary_row,) = [m for m in compressed if m.get(COMPRESSED_SUMMARY_METADATA_KEY)]
-    text = summary_row["content"]
-    assert text.count(ARCHIVE_LIST_HEADING) == 1  # the copied block was stripped, one is appended
-    assert text.count("\n- ") == 1
-    assert "s1.index.jsonl" in text
-
-
-def test_without_an_index_the_flat_list_carries_every_earlier_archive_forward(home):
-    """A session that cannot write an index keeps the flat list; it may grow, but it never drops a
-    reference (re-stacking was upstream's complaint, data loss would be worse)."""
-    c = _compressor(session_id="")
-    response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.content = "## Goal\nread them\n"
-    with patch("agent.context_compressor.call_llm", return_value=response):
-        first = c.compress(_transcript(), current_tokens=c.threshold_tokens + 1)
-        second = c.compress(first + [{"role": "user", "content": "go on"}],
-                            current_tokens=c.threshold_tokens + 1)
-    (row1,) = [m for m in first if m.get(COMPRESSED_SUMMARY_METADATA_KEY)]
-    (row2,) = [m for m in second if m.get(COMPRESSED_SUMMARY_METADATA_KEY)]
-
-    first_paths = {line for line in row1["content"].splitlines() if line.startswith("- ")}
-    second_paths = {line for line in row2["content"].splitlines() if line.startswith("- ")}
-    assert first_paths and first_paths <= second_paths  # no earlier archive lost its reference

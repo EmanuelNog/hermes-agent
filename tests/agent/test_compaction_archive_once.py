@@ -93,18 +93,14 @@ def test_the_committed_summary_names_every_archive_the_generated_text_omits_and_
     c = _compressor()
     with _no_pointer_summary():
         compressed = c.compress(msgs, current_tokens=c.threshold_tokens + 1)
-    files = [f for f in _archived(home) if not f.name.endswith(".index.jsonl")]
+    files = _archived(home)
     assert files
 
     committed = "\n".join(str(m.get("content")) for m in compressed)
-    (index_file,) = list((home / "cache" / "pruned").glob("*.index.jsonl"))
-    # The summary names ONE file — the session index — instead of every archive path.
-    assert index_file.name in committed
+    for path in files:
+        assert f"cache/pruned/{path.name}" in committed
     (summary_row,) = [m for m in compressed if m.get(COMPRESSED_SUMMARY_METADATA_KEY)]
     assert "Archived tool output" in summary_row["content"]
-    # ...and the index is what keeps each archive referenced (rows carry tool, args, call id, turn).
-    index_rows = [json.loads(line) for line in index_file.read_text().splitlines()]
-    assert {Path(r["path"]).name for r in index_rows} == {p.name for p in files}
 
     db = open_persistence(profile_scope(home=home), eager=True)
     try:
@@ -116,4 +112,4 @@ def test_the_committed_summary_names_every_archive_the_generated_text_omits_and_
     for path in files:
         os.utime(path, (old, old))
     assert cleanup_spillover_cache(max_age_hours=1) == 0
-    assert [f for f in _archived(home) if not f.name.endswith(".index.jsonl")] == files
+    assert _archived(home) == files

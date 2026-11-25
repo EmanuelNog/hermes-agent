@@ -149,16 +149,11 @@ class CompactionWindowMixin:
         nor the generated summary still name, listed in the summary row: the summarizer never saw the pointers
         (it read the originals), and the list keeps the model's path back and the reference the retention
         sweep keeps the file for."""
-        from tools.tool_result_storage import archive_list_for_summary, pruned_archive_refs, strip_archive_list
+        from tools.tool_result_storage import archive_list_for_summary, pruned_archive_refs
 
-        # A summarizer that copied an earlier list must not stack a second one: strip the generated
-        # block(s) first, then append the one list this compaction owns.
-        summary = strip_archive_list(summary)
         named = pruned_archive_refs(messages)
         kept = [*messages[:start], *messages[max(end, scan.tail_start):], {"content": summary}]
-        return self._assemble_compressed(
-            messages, start, end, scan,
-            summary + archive_list_for_summary(named, kept, getattr(self, "_session_id", "") or ""))
+        return self._assemble_compressed(messages, start, end, scan, summary + archive_list_for_summary(named, kept))
 
     def _offload_window_results(
         self, plan: list[dict[str, Any]], start: int, end: int,

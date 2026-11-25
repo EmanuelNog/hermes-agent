@@ -82,8 +82,7 @@ def test_a_path_that_is_not_an_existing_archive_is_archived_normally(tmp_path, m
     messages = _readback_messages(json.dumps({"path": path}))
     result, count = _compressor().prune_tool_results_only(messages, current_tokens=100_000)
     assert count == 1
-    archives = [p for p in (home / "cache" / "pruned").iterdir()
-                if not p.name.endswith(".index.jsonl")]  # the session index is a reference, not an archive
+    archives = list((home / "cache" / "pruned").iterdir())
     assert len(archives) == 1
     assert archives[0].read_text() == messages[3]["content"]
     assert _archive_path(result[3]["content"]) == archives[0]

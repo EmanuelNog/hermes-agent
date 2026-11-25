@@ -135,11 +135,8 @@ def test_pruned_archive_follows_its_session(home):
             m[_DB_PERSISTED_MARKER] = True
         _, count = _compressor(db).prune_tool_results_only(stored, current_tokens=100_000)
         assert count
-        entries = sorted((home / "cache" / "pruned").iterdir())
-        files = [f for f in entries if not f.name.endswith(".index.jsonl")]
+        files = sorted((home / "cache" / "pruned").iterdir())
         assert len(files) == count
-        # The index is the one reference that keeps every row it lists alive (see archive index tests).
-        assert any(f.name.endswith(".index.jsonl") for f in entries)
         stale = time.time() - 400 * 86_400
         for f in files:
             os.utime(f, (stale, stale))

@@ -114,35 +114,7 @@ def referenced_archive_refs(home) -> set | None:
                 refs.update(archive_refs_in_text(content, api_content))
     except (OSError, *STORE_FAILURES):
         return None
-    return _expand_index_refs(refs, home)
-
-
-def _expand_index_refs(refs: set, home) -> set:
-    """Add the archives an index file lists: naming ``<session>.index.jsonl`` keeps every row it names.
-
-    The summary now carries one index line instead of thousands of paths, so without this expansion
-    the archives would look unreferenced and the retention sweep would reclaim files the transcript
-    still promises. Unreadable or malformed index rows are skipped: a broken index costs recovery
-    detail, never the data behind a reference the scan can still see directly.
-    """
-    from pathlib import Path, PurePath
-
-    out = set(refs)
-    for ref in refs:
-        if not str(ref).endswith(ARCHIVE_INDEX_SUFFIX):
-            continue
-        try:
-            lines = (Path(home) / ref).read_text(encoding="utf-8").splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            try:
-                name = PurePath(str(json.loads(line).get("path") or "")).name
-            except ValueError:
-                continue
-            if name and _ARCHIVE_NAME_RE.fullmatch(name):
-                out.add(f"{PRUNED_SUBDIR}/{name}")
-    return out
+    return refs
 
 
 def cleanup_spillover_cache(max_age_hours: int | None = None) -> int:
@@ -389,52 +361,9 @@ def write_pruned_original(content: str, session_id: str, tool_name: str, tool_ca
 # ``$HERMES_HOME/cache/pruned/`` and its stub names that file, so ``read_file`` gets the exact output
 # back. A result whose write fails keeps its full body; the files share the spillover sweeper above.
 
-# One JSON line per archived result, so the summary can name ONE file instead of every path:
-# {path, tool, args_preview, call_id, ts, chars, sha256}. The index is a reference like any
-# other (the retention scan expands it), which is what keeps the archives it lists alive.
-ARCHIVE_INDEX_SUFFIX = ".index.jsonl"
-
 ARCHIVE_POINTER_SEP = " — full result: "
 _ARCHIVE_POINTER_RE = re.compile(r" — full result: \S*cache/pruned/[A-Za-z0-9_.-]+")
 _ARCHIVE_NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")  # the names the writer makes and the sweeper finds
-
-
-def archive_index_path(home, session_id: str):
-    """``cache/pruned/<session>.index.jsonl`` for *session_id* (None when the id cannot name a file)."""
-    from pathlib import Path
-
-    name = f"{session_id}{ARCHIVE_INDEX_SUFFIX}"
-    if not session_id or not _ARCHIVE_NAME_RE.fullmatch(name):
-        return None
-    return Path(home) / PRUNED_SUBDIR / name
-
-
-def append_archive_index_row(host_path: str, row: dict) -> bool:
-    """Append *row* to the session index beside *host_path*; False when it cannot be written.
-
-    Best-effort by design: the archive itself is already on disk and the stub points at it, so a
-    failed index write must never revert a prune — the summary then falls back to the flat list.
-    """
-    from pathlib import Path
-
-    # Beside the archive, whatever backend wrote it: no assumption that host_path sits under $HERMES_HOME.
-    index = Path(host_path).parent / f"{row.get('session') or ''}{ARCHIVE_INDEX_SUFFIX}"
-    if not _ARCHIVE_NAME_RE.fullmatch(index.name):
-        return False
-    line = json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
-    try:
-        index.parent.mkdir(parents=True, exist_ok=True)
-        with open(index, "a", encoding="utf-8") as fh:
-            try:
-                import fcntl
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-            except (ImportError, OSError):
-                pass
-            fh.write(line)
-            fh.flush()
-        return True
-    except OSError:
-        return False
 
 
 def has_archive_pointer(content: str) -> bool:
@@ -531,17 +460,6 @@ def archive_pruned_originals(
             continue
         written.append(archived[0])
         rows[i] = {**replacement, "content": _with_pointer(replacement.get("content"), archived[1])}
-        if session_id:  # no session id → no index path a summary could name; write nothing to lose
-            append_archive_index_row(archived[0], {
-                "session": session_id,
-                "path": archived[1],
-                "tool": tool_name,
-                "args_preview": (tool_args or "")[:200],
-                "call_id": call_id,
-                "ts": original.get("timestamp") or original.get("ts") or round(time.time(), 3),
-                "chars": len(text),
-                "sha256": hashlib.sha256(text.encode("utf-8", "replace")).hexdigest(),
-            })
     return rows, written, reverted
 
 
@@ -560,16 +478,6 @@ def archive_compaction_drops(
 
 
 ARCHIVE_LIST_HEADING = "Archived tool output (exact originals; read_file a path to recover one):"
-# Exactly what archive_list_for_summary appends: the heading, then only "- <path>/cache/pruned/<name>" lines.
-_ARCHIVE_LIST_BLOCK_RE = re.compile(
-    r"\n*" + re.escape(ARCHIVE_LIST_HEADING) + r"(?:\n- [^\n]*cache/pruned/[A-Za-z0-9_.-]+)+(?=\n|$)")
-
-
-def strip_archive_list(summary: str) -> str:
-    """*summary* without the archive list block(s) a compaction appended (a summary written before lists
-    stopped re-stacking can carry several). Only the generated shape matches, so a quoted heading in summary
-    text survives. The lists stay on the stored rows the retention sweep reads."""
-    return _ARCHIVE_LIST_BLOCK_RE.sub("", summary).rstrip() if ARCHIVE_LIST_HEADING in summary else summary
 
 
 def _row_text(row: Any) -> str:
@@ -582,32 +490,19 @@ def pruned_archive_refs(rows: Any) -> set[str]:
     return {ref for ref in archive_refs_in_text(*map(_row_text, rows)) if ref.startswith(PRUNED_SUBDIR + "/")}
 
 
-def archive_list_for_summary(named: set[str], kept: list[dict[str, Any]],
-                             session_id: str = "") -> str:
-    """What the committed summary needs to reach the archives *kept* no longer names; ``""`` when none.
-
-    With a session index on disk this is ONE line pointing at it (``cache/pruned/<session>.index.jsonl``,
-    one JSON row per result with its tool, args preview, call id and turn time). The index is itself a
-    reference, so the retention scan keeps every archive it lists. Only when no index exists — an older
-    session, a backend that cannot write it — does this fall back to the flat list of paths, which made
-    summaries 94% file list on a long session (measured 2026-11-25: 491 KB of 522 KB).
-    """
+def archive_list_for_summary(named: set[str], kept: list[dict[str, Any]]) -> str:
+    """The *named* archives no row of *kept* (the committed transcript, summary included) points at, as a
+    deterministic list to append to the committed summary; ``""`` when none. The generated summary may drop
+    a pointer: this list keeps the model's recovery path, and the reference the retention sweep reads,
+    whatever the summarizer wrote."""
     from hermes_constants import get_hermes_home
 
     missing = named - pruned_archive_refs(kept)
     if not missing:
         return ""
     home = get_hermes_home()
-    index = archive_index_path(home, session_id) if session_id else None
-    if index is not None and index.is_file():
-        return "\n\n" + ARCHIVE_LIST_HEADING + f"\n- {_archive_stub_path(str(index))}"
-    # No usable index: name the archives themselves, never an index file that is gone (a dead
-    # "read this to recover" path is worse than none — the sweep treated it as the only reference).
-    flat = [ref for ref in missing if not str(ref).endswith(ARCHIVE_INDEX_SUFFIX)]
-    if not flat:
-        return ""
     return "\n\n" + ARCHIVE_LIST_HEADING + "".join(
-        f"\n- {_archive_stub_path(str(home / ref))}" for ref in sorted(flat))
+        f"\n- {_archive_stub_path(str(home / ref))}" for ref in sorted(missing))
 
 
 def discard_archives(paths: list[str]) -> None:
