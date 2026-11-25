@@ -601,8 +601,13 @@ def archive_list_for_summary(named: set[str], kept: list[dict[str, Any]],
     index = archive_index_path(home, session_id) if session_id else None
     if index is not None and index.is_file():
         return "\n\n" + ARCHIVE_LIST_HEADING + f"\n- {_archive_stub_path(str(index))}"
+    # No usable index: name the archives themselves, never an index file that is gone (a dead
+    # "read this to recover" path is worse than none — the sweep treated it as the only reference).
+    flat = [ref for ref in missing if not str(ref).endswith(ARCHIVE_INDEX_SUFFIX)]
+    if not flat:
+        return ""
     return "\n\n" + ARCHIVE_LIST_HEADING + "".join(
-        f"\n- {_archive_stub_path(str(home / ref))}" for ref in sorted(missing))
+        f"\n- {_archive_stub_path(str(home / ref))}" for ref in sorted(flat))
 
 
 def discard_archives(paths: list[str]) -> None:
