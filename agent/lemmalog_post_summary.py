@@ -46,6 +46,25 @@ def script_path(home: Path | None = None) -> Path:
     return Path(root) / "scripts" / "lemmalog-sweep.sh"
 
 
+def instruction_path(home: Path | None = None) -> Path:
+    """Where the sweep keeps the post-summary instruction (next to its store)."""
+    store = os.environ.get("LEMMALOG_MCP_PATH")
+    if store:
+        return Path(store).parent / "post-summary-instruction.txt"
+    if home is None:
+        from hermes_constants import get_hermes_home
+
+        home = get_hermes_home()
+    return Path(home) / "lemmalog" / "post-summary-instruction.txt"
+
+
+def instruction_text(home: Path | None = None) -> str:
+    try:
+        return instruction_path(home).read_text().strip()
+    except OSError:
+        return ""
+
+
 def payload_path(session_id: str, home: Path | None = None) -> Path:
     if home is None:
         from hermes_constants import get_hermes_home
@@ -74,6 +93,8 @@ def maybe_capture_after_summary(
     model: str = "",
     reasoning_effort: Optional[str] = None,
     ts: Optional[list[int]] = None,
+    reply: str = "",
+    usage: Optional[dict] = None,
 ) -> Optional[Path]:
     """Write the second-turn payload and spawn the extractor; ``None`` when the switch is off."""
     if not enabled() or not (summary or "").strip() or not session_id:
@@ -95,6 +116,8 @@ def maybe_capture_after_summary(
             "model": model,
             "reasoning_effort": reasoning_effort,
             "ts": list(ts or []),
+            "reply": reply,
+            "usage": usage or {},
             "captured_at": time.time(),
         }
         path = payload_path(session_id)

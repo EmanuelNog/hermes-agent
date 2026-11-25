@@ -3502,12 +3502,12 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         self.summary_model = ""  # empty = use main model
         self._clear_compression_failure_cooldown()  # no cooldown — retry immediately
 
-    def _call_summary_llm(self, messages: list[dict[str, str]], prompt_started_at: float) -> str:
-        """Issue the single aux summary call; return validated content text.
-        ``messages`` is the ``[system, user]`` pair from ``_build_summary_prompt``.
-        Raises RuntimeError for empty content or a length-truncated (PARTIAL) summary so the failure
-        routes through main-model fallback + cooldown instead of wiping the compacted turns."""
-        # call_llm writes the route it actually selected; never pre-resolve a second, stale pair.
+    def _compression_call_kwargs(self, messages: list[dict[str, str]]):
+        """The summarizer's request kwargs, reused verbatim by the extraction turn.
+
+        Same task, route, main runtime and api_mode means the provider sees the same wire shape;
+        appended messages only extend the prefix the summarizer just cached.
+        """
         _aux_route: dict[str, str] = {}
         call_kwargs: dict[str, Any] = {
             "task": "compression",
@@ -3521,6 +3521,59 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         }
         # Pinned route (stall fallback) replaces task routing so the retry leaves the stalled backend.
         self._apply_summary_route(call_kwargs, _pinned_summary_call_kwargs())
+        return call_kwargs, _aux_route
+
+    def _extract_after_summary(self, messages: list[dict[str, str]], summary: str) -> None:
+        """Second turn on the just-used summarizer prefix: lemmalog extraction (off by default).
+
+        In-process on purpose: the cache key is the wire request, so only the same client with the
+        same task/route can read the prefix the summary call left warm. The reply is handed to the
+        sweep script, which parses, gates and writes; nothing here may raise into compaction.
+        """
+        from agent.lemmalog_post_summary import (
+            enabled, instruction_text, maybe_capture_after_summary,
+        )
+        if not enabled():
+            return
+        try:
+            instruction = instruction_text()
+            if not instruction:
+                logger.debug("lemmalog post-summary skipped: no instruction file")
+                return
+            follow = list(messages) + [
+                {"role": "assistant", "content": summary},
+                {"role": "user", "content": instruction},
+            ]
+            call_kwargs, _aux_route = self._compression_call_kwargs(follow)
+            from agent.aux_accounting import accounting_scope
+
+            with accounting_scope(getattr(self, "_session_db", None), getattr(self, "_session_id", "")):
+                with aux_interrupt_protection():
+                    response = call_llm(**call_kwargs)
+            text = extract_content_or_reasoning(response, max_reasoning_chars=4000).strip()
+            raw_usage = getattr(response, "usage", None)
+            if raw_usage is None and isinstance(response, dict):
+                raw_usage = response.get("usage")
+            if hasattr(raw_usage, "model_dump"):
+                usage = raw_usage.model_dump()
+            elif isinstance(raw_usage, dict):
+                usage = dict(raw_usage)
+            else:
+                usage = {}
+            maybe_capture_after_summary(
+                messages, summary, session_id=getattr(self, "_session_id", "") or "",
+                model=self.summary_model or self.model, reply=text, usage=usage,
+            )
+        except Exception:  # health: allow BLE001 -- extraction must never fail a compaction
+            logger.debug("lemmalog post-summary extraction turn failed", exc_info=True)
+
+    def _call_summary_llm(self, messages: list[dict[str, str]], prompt_started_at: float) -> str:
+        """Issue the single aux summary call; return validated content text.
+        ``messages`` is the ``[system, user]`` pair from ``_build_summary_prompt``.
+        Raises RuntimeError for empty content or a length-truncated (PARTIAL) summary so the failure
+        routes through main-model fallback + cooldown instead of wiping the compacted turns."""
+        # call_llm writes the route it actually selected; never pre-resolve a second, stale pair.
+        call_kwargs, _aux_route = self._compression_call_kwargs(messages)
         # Compression is atomic: protect the in-flight summary call from a mid-turn gateway interrupt.
         # Without this, an incoming user message aborts the summary and compression falls back to a degraded
         # static marker, losing the real handoff (#23975). Re-entrant: a main-model retry (_generate_summary
@@ -3667,14 +3720,9 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
 
             _raise_if_stale_attempt(self)
             self._record_summary_success(summary)
-            # The summary's prompt prefix is warm for minutes; hand it to the lemmalog extractor
-            # as a second turn (off unless LEMMALOG_POST_SUMMARY=1; never raises into compaction).
-            from agent.lemmalog_post_summary import maybe_capture_after_summary
-
-            maybe_capture_after_summary(
-                messages, summary, session_id=getattr(self, "_session_id", "") or "",
-                model=self.summary_model or self.model,
-            )
+            # The summary's prompt prefix is warm; the extraction turn extends it (off by default,
+            # never raises into compaction).
+            self._extract_after_summary(messages, summary)
             return self._with_summary_prefix(summary)
         except Exception as e:  # health: allow BLE001 -- unchanged summary boundary: every failure goes to _on_summary_failure
             return self._on_summary_failure(e, turns_to_summarize, focus_topic, memory_context)
