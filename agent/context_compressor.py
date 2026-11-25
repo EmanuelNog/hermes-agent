@@ -3667,6 +3667,14 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
 
             _raise_if_stale_attempt(self)
             self._record_summary_success(summary)
+            # The summary's prompt prefix is warm for minutes; hand it to the lemmalog extractor
+            # as a second turn (off unless LEMMALOG_POST_SUMMARY=1; never raises into compaction).
+            from agent.lemmalog_post_summary import maybe_capture_after_summary
+
+            maybe_capture_after_summary(
+                messages, summary, session_id=getattr(self, "_session_id", "") or "",
+                model=self.summary_model or self.model,
+            )
             return self._with_summary_prefix(summary)
         except Exception as e:  # health: allow BLE001 -- unchanged summary boundary: every failure goes to _on_summary_failure
             return self._on_summary_failure(e, turns_to_summarize, focus_topic, memory_context)
