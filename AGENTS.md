@@ -9,30 +9,30 @@ goes in `website/docs/developer-guide/`.
 
 ## What Hermes Is
 
-Hermes is a personal AI agent that runs one agent core across a CLI, a TUI, an Electron desktop
-app, a web dashboard, ACP editors and a messaging gateway (25+ platform plugins). It is extended
-through **plugins and skills**, not by growing the core.
+Hermes is one agent core across a CLI, a TUI, an Electron desktop app, a web dashboard, ACP
+editors and a messaging gateway (25+ platform plugins), extended through **plugins and skills**,
+not by growing the core.
 
-Two invariants shape almost every design decision and are the lens for reviewing any change:
+Two invariants lens every design decision and every review:
 
 - **Per-conversation prompt caching is sacred.** Mutating past context, swapping toolsets,
   reloading memories or rebuilding the system prompt mid-conversation breaks the cached prefix and
-  multiplies the user's cost; the ONE exception is context compression. Slash commands that change
+  multiplies cost; the ONE exception is context compression. Slash commands that change
   system-prompt state defer to the next session, with an opt-in `--now` (`/skills install --now`).
 - **The core is a narrow waist; capability lives at the edges.** Every model tool is sent on
   every API call, so the bar for a new *core* tool is high. New capability should arrive as a
   CLI command + skill, a service-gated tool, or a plugin — not as core surface.
 
-A change to the stock system prompt or `tools[]` fails `tests/ci/test_prompt_surface.py` until
-`scripts/ci/prompt_surface.py render` is committed with it, and that snapshot
-(`tests/fixtures/prompt_surface/`) needs a hermes-agent-core approval to merge.
+Changing the stock system prompt or `tools[]` fails `tests/ci/test_prompt_surface.py` until
+`scripts/ci/prompt_surface.py render` is committed with it; the snapshot needs a
+hermes-agent-core approval to merge.
 
 ## Contribution rubric
 
-The project's intent layer, for contributors and for the triage sweeper (which may only close on
-`implemented_on_main`, `cannot_reproduce` or `incoherent`; taste-based closes are a maintainer's
-call, and when in doubt a PR stays open). Long form with examples:
-`website/docs/developer-guide/contributing.md` § Contribution rubric.
+The intent layer for contributors and the triage sweeper (which may only close on
+`implemented_on_main`, `cannot_reproduce` or `incoherent`; taste-based closes are a maintainer's,
+and when in doubt a PR stays open). Long form: `website/docs/developer-guide/contributing.md` §
+Contribution rubric.
 
 **Wanted:** real bug fixes (repro on `main`, the exact line, the whole class incl. sibling paths);
 reach at the edges (adapters, providers, models, UI features) wired into the existing setup UX;
@@ -57,8 +57,7 @@ hardening is ordinary public work. Name the §2 boundary crossed, with a repro o
 
 **Footprint ladder** (take the highest rung that solves it): extend existing code → CLI command +
 skill → service-gated tool (`check_fn` answers reachability/opt-in, never per-session surface) →
-plugin → MCP server in the catalog → new core tool (fundamental, broadly useful, unreachable
-otherwise).
+plugin → MCP server in the catalog → new core tool (fundamental and otherwise unreachable).
 
 ## Development Environment
 
@@ -67,8 +66,7 @@ otherwise).
 environment in `CONTRIBUTING.md`. **`python scripts/check`** (`just check`) runs every blocking
 lint check CI runs, with CI's pinned tools; `--install-hook pre-push` runs it on every push (re-run
 after pulling to refresh the hook). `just` lists every developer command (lefthook calls the same
-recipes); a new command is a `scripts/` file plus a recipe. The `HX0xx`/`PS-P0x` rules and their
-fixes are in `scripts/code_health/config.py`; `# noqa` does not waive a finding,
+recipes); a new command is a `scripts/` file plus a recipe. `HX0xx`/`PS-P0x` rules live in `scripts/code_health/config.py`; `# noqa` does not waive a finding,
 `# health: allow <RULE> -- <why>` does.
 
 ## Project Structure
@@ -88,8 +86,8 @@ hermes-agent/
 └── website/              # Docusaurus docs (developer-guide/ holds the long-form area docs)
 ```
 
-**User state:** `~/.hermes/config.yaml` (settings), `.env` (secrets only), `logs/` (`hermes logs`);
-all profile-aware via `get_hermes_home()`.
+**User state:** `~/.hermes/config.yaml` (settings), `.env` (secrets only), `logs/`; profile-aware
+via `get_hermes_home()`.
 
 ### Packages and Python shape
 
@@ -117,6 +115,9 @@ per variant and a name → variant table (`tools/environments/`, its table still
 
 ## Rules that apply everywhere
 
+- **Share the tree:** `git worktree list` first; reuse the worktree+branch on the same subject and
+  Agent Mail its agent, else create one named for the work (new subject → new branch;
+  `CONTRIBUTING.md`).
 - **No defensive clutter:** no wrappers or `try/except: pass` around code that cannot fail, no flags
   nobody sets, no dead code wired in without E2E proof. Comments keep the WHY, cut the WHAT.
 - **Never infer process identity from argv substrings;** use

@@ -34,6 +34,24 @@ A quick search before you build saves your time and keeps the PR queue clean —
 
 Related: #38284 covers the agent-side analog — Hermes itself checking existing issues and PRs before deep self-troubleshooting. This section is the human-contributor complement.
 
+### Branches, worktrees and other agents
+
+Before you branch:
+
+1. Look for a branch and worktree already doing **exactly this work**: `git worktree list`, then
+   `git branch -a` and the branch names — a branch is named for the work it carries, never for the
+   session or the feature that happened to start it.
+2. If one matches, check it out and work there. If what you are about to do is not exactly what
+   that branch is for, create a new branch instead of widening its scope.
+3. Check whether an agent is active in that worktree — recent commits, fresh file mtimes, running
+   processes, and Agent Mail. If one is, contact it over Agent Mail and agree who does what before
+   touching the tree.
+4. Only when no branch or worktree matches and no agent is active, create your own worktree and
+   branch (`git worktree add ../<repo>-<topic> -b <topic>`), named for exactly the work it carries.
+
+`.beads/beads.db` is untracked, so a fresh worktree has no ledger: run
+`br --db <main-checkout>/.beads/beads.db …` so every agent reads and closes the same issues.
+
 ---
 
 ## Should it be a Skill or a Tool?
