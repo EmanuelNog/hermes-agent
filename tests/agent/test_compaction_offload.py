@@ -19,7 +19,7 @@ import pytest
 
 from agent import prepared_compaction as pc
 from agent.context_compressor import COMPRESSED_SUMMARY_METADATA_KEY, ContextCompressor
-from tools.tool_result_storage import ARCHIVE_POINTER_SEP
+from tools.tool_result_storage import ARCHIVE_LIST_HEADING, ARCHIVE_POINTER_SEP
 from agent.prepared_compaction import PreparedCompaction
 from agent.conversation_compression_manual import CompressRequest, compress_now
 
@@ -355,3 +355,21 @@ def test_a_summarized_result_whose_archive_write_fails_is_reported(home):
         projected, count, written, failed = _compressor()._offload_window_results(msgs, 0, len(msgs))
     assert (count, written, failed) == (0, [], 1)
     assert projected[1]["content"] == msgs[1]["content"]  # the row itself is never stubbed without a file
+
+
+def test_a_summarizer_that_copies_an_earlier_list_does_not_stack_a_second(home):
+    """A model echoing the previous handoff's block must not make the summary name it twice."""
+    c = _compressor()
+    carried = ("## Goal\nread the files.\n\n" + ARCHIVE_LIST_HEADING
+               + "\n- ~/.hermes/cache/pruned/s1.index.jsonl\n")
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = carried
+    with patch("agent.context_compressor.call_llm", return_value=response):
+        compressed = c.compress(_transcript(), current_tokens=c.threshold_tokens + 1)
+
+    (summary_row,) = [m for m in compressed if m.get(COMPRESSED_SUMMARY_METADATA_KEY)]
+    text = summary_row["content"]
+    assert text.count(ARCHIVE_LIST_HEADING) == 1  # the copied block was stripped, one is appended
+    assert text.count("\n- ") == 1
+    assert "s1.index.jsonl" in text
