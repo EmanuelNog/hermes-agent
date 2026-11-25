@@ -152,3 +152,71 @@ def test_a_publishing_backend_is_named_at_the_path_its_read_file_opens(home, mon
     block = trs.archive_list_for_summary(trs.pruned_archive_refs(rows), [], "s1")
     assert block.count("\n- ") == 1
     assert "/.hermes/cache/pruned/s1.index.jsonl" in block  # the path the sandbox's read_file opens
+
+
+def test_a_missing_index_is_not_offered_as_a_recovery_path(home):
+    """With the index file gone, the flat fallback names the archives, never the dead index path."""
+    block = trs.archive_list_for_summary(
+        {"cache/pruned/a.json", "cache/pruned/s1.index.jsonl"}, [], "s1")
+    lines = [line for line in block.splitlines() if line.startswith("- ")]
+    assert len(lines) == 1 and lines[0].endswith("/a.json")
+
+
+def test_the_sweep_keeps_index_listed_archives_and_drops_the_ones_a_broken_row_hid(home):
+    """The retention answer for a real state.db: readable rows keep their archive, broken rows lose it."""
+    import os
+
+    from persistence_assembly import open_persistence, profile_scope
+    from tests.fixtures.storage_seed import seed_messages, seed_session
+
+    d = home / "cache" / "pruned"
+    d.mkdir(parents=True)
+    for name in ("a.json", "b.json", "c.json"):
+        (d / name).write_text("{}", encoding="utf-8")
+    (d / "s1.index.jsonl").write_text("\n".join([
+        json.dumps({"path": "~/.hermes/cache/pruned/a.json"}),
+        "{this row is broken but b.json is its archive",
+    ]) + "\n", encoding="utf-8")
+
+    summary = f"## Goal\nread\n\n{trs.ARCHIVE_LIST_HEADING}\n- ~/.hermes/cache/pruned/s1.index.jsonl"
+    db = open_persistence(profile_scope(home=home), eager=True)
+    try:
+        seed_session(db, "s1", "cli")
+        seed_messages(db, "s1", {"role": "assistant", "content": summary})
+    finally:
+        db.close()
+
+    old = 1_000_000_000
+    for p in d.iterdir():
+        os.utime(p, (old, old))
+    assert trs.cleanup_spillover_cache(max_age_hours=1) == 2   # b.json (broken row) and c.json (no row)
+    assert sorted(p.name for p in d.iterdir()) == ["a.json", "s1.index.jsonl"]
+
+
+def test_one_sessions_index_does_not_keep_another_sessions_archives(home):
+    import os
+
+    from persistence_assembly import open_persistence, profile_scope
+    from tests.fixtures.storage_seed import seed_messages, seed_session
+
+    d = home / "cache" / "pruned"
+    d.mkdir(parents=True)
+    for name in ("s1a.json", "s2a.json"):
+        (d / name).write_text("{}", encoding="utf-8")
+    for sid, archive in (("s1", "s1a.json"), ("s2", "s2a.json")):
+        (d / f"{sid}.index.jsonl").write_text(
+            json.dumps({"path": f"~/.hermes/cache/pruned/{archive}"}) + "\n", encoding="utf-8")
+
+    summary = f"## Goal\nread\n\n{trs.ARCHIVE_LIST_HEADING}\n- ~/.hermes/cache/pruned/s1.index.jsonl"
+    db = open_persistence(profile_scope(home=home), eager=True)
+    try:
+        seed_session(db, "s1", "cli")
+        seed_messages(db, "s1", {"role": "assistant", "content": summary})
+    finally:
+        db.close()
+
+    old = 1_000_000_000
+    for p in d.iterdir():
+        os.utime(p, (old, old))
+    assert trs.cleanup_spillover_cache(max_age_hours=1) == 2   # s2a.json + s2.index.jsonl
+    assert sorted(p.name for p in d.iterdir()) == ["s1.index.jsonl", "s1a.json"]

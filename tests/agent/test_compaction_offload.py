@@ -373,3 +373,22 @@ def test_a_summarizer_that_copies_an_earlier_list_does_not_stack_a_second(home):
     assert text.count(ARCHIVE_LIST_HEADING) == 1  # the copied block was stripped, one is appended
     assert text.count("\n- ") == 1
     assert "s1.index.jsonl" in text
+
+
+def test_without_an_index_the_flat_list_carries_every_earlier_archive_forward(home):
+    """A session that cannot write an index keeps the flat list; it may grow, but it never drops a
+    reference (re-stacking was upstream's complaint, data loss would be worse)."""
+    c = _compressor(session_id="")
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = "## Goal\nread them\n"
+    with patch("agent.context_compressor.call_llm", return_value=response):
+        first = c.compress(_transcript(), current_tokens=c.threshold_tokens + 1)
+        second = c.compress(first + [{"role": "user", "content": "go on"}],
+                            current_tokens=c.threshold_tokens + 1)
+    (row1,) = [m for m in first if m.get(COMPRESSED_SUMMARY_METADATA_KEY)]
+    (row2,) = [m for m in second if m.get(COMPRESSED_SUMMARY_METADATA_KEY)]
+
+    first_paths = {line for line in row1["content"].splitlines() if line.startswith("- ")}
+    second_paths = {line for line in row2["content"].splitlines() if line.startswith("- ")}
+    assert first_paths and first_paths <= second_paths  # no earlier archive lost its reference
