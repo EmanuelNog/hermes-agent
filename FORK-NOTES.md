@@ -7,7 +7,35 @@ names it.
 
 | date | entry | state |
 |---|---|---|
+| 2026-11-25 | [Compaction: no archive index; upstream's ownership rule stands](#2026-11-25--compaction-no-archive-index-upstreams-ownership-rule-stands) | active |
 | 2026-11-14 | [Compaction: no async/prefetch; keep default compression](#2026-11-14--compaction-no-asyncprefetch-keep-default-compression) | active |
+
+---
+
+## 2026-11-25 — Compaction: no archive index; upstream's ownership rule stands
+
+**Decision.** The fork carries no archive-list implementation of its own. The
+`cache/pruned/<session>.index.jsonl` file and the one-line summary reference are retired; the committed
+summary follows upstream's rule — a stored handoff's list stays on its `state.db` row, and each summary
+lists only the archives its own compaction made. Upstream `#159923` (`b80068d4..cf0eb13c`) is ported
+verbatim. The retired implementation is preserved on `archive/compaction-archive-index-2026-11-25`
+(install build, `f193a5e9b2`) and `archive/compaction-archive-index-pr-2026-11-25` (PR draft,
+`79a77230dc`) and is not maintained.
+
+### Why upstream's rule replaces it
+
+The index collapsed the flat `Archived tool output` appendix (measured: 491 KB of a 522 KB summary,
+3,585 paths) to one line backed by a JSON row per archive (`path, tool, args_preview, call_id, ts,
+chars, sha256`), and `_expand_index_refs` kept every listed archive referenced by the retention sweep.
+Upstream removes the cause instead: `named` ignores a stored handoff's own list (lists never re-stack),
+`strip_archive_list` keeps the block out of the summarizer prompt, and the "still named" set is computed
+from the rows assembly keeps. Residual difference: one compaction's own list is still flat, bounded by
+that window's drops rather than cumulative; the index made it one line and added the call join. Two
+mechanisms for one reference is drift this fork does not keep, so the smaller upstream rule wins.
+
+**Rejected.** Keeping the index beside upstream's rule (two mechanisms for one reference, plus an
+assembly-side strip to stop a copied block), and capping the list (PR `#158892`, closed unmerged: it
+drops recovery paths). Cost of either: permanent divergence in the hottest compaction files.
 
 ---
 
