@@ -88,8 +88,16 @@ def _originals(msgs):
 
 
 def _archived(home) -> list[Path]:
+    """Archive files only: the session index is a reference, not an archived result."""
     d = home / "cache" / "pruned"
-    return sorted(d.iterdir()) if d.exists() else []
+    if not d.exists():
+        return []
+    return sorted(p for p in d.iterdir() if not p.name.endswith(".index.jsonl"))
+
+
+def _index_file(home) -> Path:
+    (index,) = [p for p in (home / "cache" / "pruned").iterdir() if p.name.endswith(".index.jsonl")]
+    return index
 
 
 def _archived_dir() -> list[Path]:
@@ -129,7 +137,11 @@ def test_the_summarizer_reads_original_results_and_archives_land_only_after_the_
     files = _archived(home)
     assert files and {f.read_bytes() for f in files} <= {b.encode("utf-8") for b in originals.values()}
     committed = "\n".join(str(m.get("content")) for m in compressed)
-    assert all(f"cache/pruned/{f.name}" in committed for f in files)  # every archive stays reachable
+    # One reference keeps them all: the summary names the session index, whose rows name each archive.
+    index = _index_file(home)
+    assert f"cache/pruned/{index.name}" in committed
+    assert {Path(json.loads(line)["path"]).name for line in index.read_text().splitlines()} == {
+        f.name for f in files}
     _assert_pointers_name_byte_exact_originals(home, originals, compressed)
 
 
@@ -329,7 +341,10 @@ def test_compaction_archives_small_string_results(home, summarizer, body):
     compressed = c.compress(msgs, current_tokens=c.threshold_tokens + 1)
     files = _archived(home)
     assert any(p.read_bytes() == body.encode("utf-8") for p in files)
-    assert all(f"cache/pruned/{p.name}" in str(compressed) for p in files)
+    index = _index_file(home)
+    assert f"cache/pruned/{index.name}" in str(compressed)
+    assert {Path(json.loads(line)["path"]).name for line in index.read_text().splitlines()} == {
+        p.name for p in files}
 
 
 def test_a_summarized_result_whose_archive_write_fails_is_reported(home):
