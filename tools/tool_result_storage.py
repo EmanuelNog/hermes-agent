@@ -531,16 +531,17 @@ def archive_pruned_originals(
             continue
         written.append(archived[0])
         rows[i] = {**replacement, "content": _with_pointer(replacement.get("content"), archived[1])}
-        append_archive_index_row(archived[0], {
-            "session": session_id or "session",
-            "path": archived[1],
-            "tool": tool_name,
-            "args_preview": (tool_args or "")[:200],
-            "call_id": call_id,
-            "ts": original.get("timestamp") or original.get("ts") or round(time.time(), 3),
-            "chars": len(text),
-            "sha256": hashlib.sha256(text.encode("utf-8", "replace")).hexdigest(),
-        })
+        if session_id:  # no session id → no index path a summary could name; write nothing to lose
+            append_archive_index_row(archived[0], {
+                "session": session_id,
+                "path": archived[1],
+                "tool": tool_name,
+                "args_preview": (tool_args or "")[:200],
+                "call_id": call_id,
+                "ts": original.get("timestamp") or original.get("ts") or round(time.time(), 3),
+                "chars": len(text),
+                "sha256": hashlib.sha256(text.encode("utf-8", "replace")).hexdigest(),
+            })
     return rows, written, reverted
 
 
@@ -559,6 +560,16 @@ def archive_compaction_drops(
 
 
 ARCHIVE_LIST_HEADING = "Archived tool output (exact originals; read_file a path to recover one):"
+# Exactly what archive_list_for_summary appends: the heading, then only "- <path>/cache/pruned/<name>" lines.
+_ARCHIVE_LIST_BLOCK_RE = re.compile(
+    r"\n*" + re.escape(ARCHIVE_LIST_HEADING) + r"(?:\n- [^\n]*cache/pruned/[A-Za-z0-9_.-]+)+(?=\n|$)")
+
+
+def strip_archive_list(summary: str) -> str:
+    """*summary* without the archive list block(s) a compaction appended (a summary written before lists
+    stopped re-stacking can carry several). Only the generated shape matches, so a quoted heading in summary
+    text survives. The lists stay on the stored rows the retention sweep reads."""
+    return _ARCHIVE_LIST_BLOCK_RE.sub("", summary).rstrip() if ARCHIVE_LIST_HEADING in summary else summary
 
 
 def _row_text(row: Any) -> str:

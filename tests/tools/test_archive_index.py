@@ -81,3 +81,74 @@ def test_pruning_writes_an_index_row_per_archived_result(home):
     assert entries[0]["call_id"] == "call_1" and entries[0]["tool"] == "terminal"
     assert entries[0]["chars"] == 20_000
     assert entries[0]["args_preview"] == '{"command": "ls"}'
+
+
+def test_a_copied_list_is_stripped_and_a_quoted_heading_survives(home):
+    """The summarizer may echo the previous handoff: its block is stripped, its prose is not."""
+    block = f"\n\n{trs.ARCHIVE_LIST_HEADING}\n- ~/.hermes/cache/pruned/a.txt\n- ~/.hermes/cache/pruned/b.json"
+    quoted = f'## Note\nUser asked: "why does {trs.ARCHIVE_LIST_HEADING} grow?"'
+    assert trs.strip_archive_list(quoted + block + block) == quoted
+
+    one_index = f"\n\n{trs.ARCHIVE_LIST_HEADING}\n- ~/.hermes/cache/pruned/local-abc.index.jsonl"
+    assert trs.strip_archive_list("## Goal\nread them\n" + one_index) == "## Goal\nread them"
+
+
+def test_a_corrupt_index_row_costs_that_row_not_the_reference_set(home):
+    d = home / "cache" / "pruned"
+    d.mkdir(parents=True)
+    (d / "s1.index.jsonl").write_text("\n".join([
+        json.dumps({"path": "~/.hermes/cache/pruned/a.json"}),
+        "{not json",
+        json.dumps({"path": "../../etc/passwd"}),
+        json.dumps({"path": "~/.hermes/cache/pruned/gone.json"}),
+        "",
+    ]), encoding="utf-8")
+
+    refs = trs._expand_index_refs({"cache/pruned/s1.index.jsonl"}, home)
+    names = {ref.removeprefix("cache/pruned/") for ref in refs} - {"s1.index.jsonl"}
+    assert "a.json" in names                       # the readable row still protects its archive
+    assert "gone.json" in names                    # a dangling name is harmless to the sweep
+    assert all("/" not in name and ".." not in name for name in names)  # a path-shaped row cannot escape
+
+
+def test_the_same_body_archived_twice_is_two_rows_not_one(home):
+    msgs = [{"role": "assistant", "content": "", "tool_calls": [{
+        "id": "call_a", "type": "function", "function": {"name": "terminal", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_a", "content": "y" * 20_000}]
+    pruned = [msgs[0], {"role": "tool", "tool_call_id": "call_a", "content": "[tool] short"}]
+
+    trs.archive_pruned_originals(msgs, pruned, "s1")
+    trs.archive_pruned_originals(msgs, pruned, "s1")
+
+    rows = [json.loads(line) for line in
+            (home / "cache" / "pruned" / "s1.index.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 2 and len({r["sha256"] for r in rows}) == 1  # one row per archive written, no dedupe
+
+
+def test_a_session_that_cannot_name_a_file_writes_no_index_and_keeps_the_flat_list(home):
+    msgs = [{"role": "assistant", "content": "", "tool_calls": [{
+        "id": "call_a", "type": "function", "function": {"name": "terminal", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_a", "content": "z" * 20_000}]
+    pruned = [msgs[0], {"role": "tool", "tool_call_id": "call_a", "content": "[tool] short"}]
+
+    for sid in ("", "a/b"):
+        rows, written, reverted = trs.archive_pruned_originals(msgs, pruned, sid)
+        assert written and not reverted
+        assert not list((home / "cache" / "pruned").glob("*.index.jsonl"))
+        block = trs.archive_list_for_summary(trs.pruned_archive_refs(rows), [], sid)
+        assert block.count("\n- ") == 1  # the flat fallback still names the archive
+
+
+def test_a_publishing_backend_is_named_at_the_path_its_read_file_opens(home, monkeypatch):
+    """The index is written beside the archive on the host and named in the sandbox's own path form."""
+    monkeypatch.setenv("TERMINAL_ENV", "docker")
+    msgs = [{"role": "assistant", "content": "", "tool_calls": [{
+        "id": "call_a", "type": "function", "function": {"name": "terminal", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_a", "content": "w" * 20_000}]
+    pruned = [msgs[0], {"role": "tool", "tool_call_id": "call_a", "content": "[tool] short"}]
+
+    rows, written, _ = trs.archive_pruned_originals(msgs, pruned, "s1")
+    assert written
+    block = trs.archive_list_for_summary(trs.pruned_archive_refs(rows), [], "s1")
+    assert block.count("\n- ") == 1
+    assert "/.hermes/cache/pruned/s1.index.jsonl" in block  # the path the sandbox's read_file opens
