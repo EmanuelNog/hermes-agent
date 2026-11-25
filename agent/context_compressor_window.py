@@ -153,7 +153,9 @@ class CompactionWindowMixin:
 
         named = pruned_archive_refs(messages)
         kept = [*messages[:start], *messages[max(end, scan.tail_start):], {"content": summary}]
-        return self._assemble_compressed(messages, start, end, scan, summary + archive_list_for_summary(named, kept))
+        return self._assemble_compressed(
+            messages, start, end, scan,
+            summary + archive_list_for_summary(named, kept, getattr(self, "_session_id", "") or ""))
 
     def _offload_window_results(
         self, plan: list[dict[str, Any]], start: int, end: int,
