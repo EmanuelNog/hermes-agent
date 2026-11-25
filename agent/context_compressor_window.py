@@ -152,7 +152,7 @@ class CompactionWindowMixin:
         prior-tail content: its own archive list stays on that stored row, which the sweep still reads, so
         lists never re-stack. An unstored handoff (no session store) is the list's only copy, so it carries over."""
         from agent.context_compressor import _DB_PERSISTED_MARKER
-        from tools.tool_result_storage import archive_list_for_summary, pruned_archive_refs
+        from tools.tool_result_storage import archive_list_for_summary, pruned_archive_refs, strip_archive_list
 
         named = pruned_archive_refs(
             row for idx, msg in enumerate(messages)
@@ -163,7 +163,12 @@ class CompactionWindowMixin:
         # What the committed transcript really keeps: assembly drops standalone handoffs from the head and tail.
         kept = [*self._assemble_head(messages, start), {"content": summary},
                 *self._assemble_tail(messages, end, scan.tail_start, scan.summary_indices)]
-        return self._assemble_compressed(messages, start, end, scan, summary + archive_list_for_summary(named, kept))
+        # A summarizer that copied an earlier list must not stack a second one: strip the generated
+        # block(s) first, then append the one list this compaction owns.
+        summary = strip_archive_list(summary)
+        return self._assemble_compressed(
+            messages, start, end, scan,
+            summary + archive_list_for_summary(named, kept, getattr(self, "_session_id", "") or ""))
 
     def _offload_window_results(
         self, plan: list[dict[str, Any]], start: int, end: int,

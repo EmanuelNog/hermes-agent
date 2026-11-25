@@ -46,8 +46,11 @@ def _transcript(n=24, chars=12_000):
 
 
 def _archived(home) -> list[Path]:
+    """Archive files only: the session index is a reference, not an archived result."""
     d = home / "cache" / "pruned"
-    return sorted(d.iterdir()) if d.exists() else []
+    if not d.exists():
+        return []
+    return sorted(p for p in d.iterdir() if not p.name.endswith(".index.jsonl"))
 
 
 def _no_pointer_summary():
@@ -97,10 +100,14 @@ def test_the_committed_summary_names_every_archive_the_generated_text_omits_and_
     assert files
 
     committed = "\n".join(str(m.get("content")) for m in compressed)
-    for path in files:
-        assert f"cache/pruned/{path.name}" in committed
+    (index_file,) = list((home / "cache" / "pruned").glob("*.index.jsonl"))
+    # The summary names ONE file — the session index — instead of every archive path.
+    assert index_file.name in committed
     (summary_row,) = [m for m in compressed if m.get(COMPRESSED_SUMMARY_METADATA_KEY)]
     assert "Archived tool output" in summary_row["content"]
+    # ...and the index is what keeps each archive referenced (rows carry tool, args, call id, turn).
+    index_rows = [json.loads(line) for line in index_file.read_text().splitlines()]
+    assert {Path(r["path"]).name for r in index_rows} == {p.name for p in files}
 
     db = open_persistence(profile_scope(home=home), eager=True)
     try:
@@ -126,14 +133,15 @@ def _next_batch(start, n=24, chars=12_000):
 
 
 @pytest.mark.parametrize("stored", [True, False])
-def test_a_stored_handoff_keeps_its_own_list_and_an_unstored_one_carries_it(home, stored):
-    """A stored handoff's archive list stays on its state.db row, so the next summary does not repeat it
-    (before the fix each compaction re-listed every earlier path and the summary grew without bound). With no
-    session store the old summary is the list's only copy, so its paths carry forward instead of vanishing."""
+def test_repeated_compactions_name_one_index_and_append_only_their_own_rows(home, stored):
+    """Each round names the same session index and appends one row per archive it made; earlier rows stay
+    on the index (which the sweep reads), so nothing re-stacks in the prompt and nothing is lost. A stored
+    handoff and an unstored one behave the same once the index exists."""
     from session_rules.turns import _DB_PERSISTED_MARKER
     from tools.tool_result_storage import ARCHIVE_LIST_HEADING, pruned_archive_refs
     msgs = _transcript()
-    previous: set[str] = set()
+    seen_rows = 0
+    rows: list[dict] = []
     for rnd in range(3):
         c = _compressor()  # a fresh process per round: the prior summary comes only from the handoff row
         with _no_pointer_summary() as llm:
@@ -141,12 +149,27 @@ def test_a_stored_handoff_keeps_its_own_list_and_an_unstored_one_carries_it(home
         request = json.dumps(llm.call_args.kwargs.get("messages"), ensure_ascii=False)
         assert (rnd == 0 or "Read them all." in request) and ARCHIVE_LIST_HEADING not in request, rnd
         (summary_row,) = [m for m in msgs if m.get(COMPRESSED_SUMMARY_METADATA_KEY)]
-        listed = pruned_archive_refs([summary_row])
-        assert listed and (not listed & previous if stored else previous <= listed), rnd
-        previous = listed
+        assert pruned_archive_refs([summary_row]) == {"cache/pruned/s1.index.jsonl"}, rnd
+        rows = [json.loads(line) for line in
+                (home / "cache" / "pruned" / "s1.index.jsonl").read_text().splitlines()]
+        assert len(rows) > seen_rows, rnd                     # this round appended its own archives
+        assert len(rows) == len({r["path"] for r in rows})    # one row per archive, no duplicates
+        seen_rows = len(rows)
         if stored:
             summary_row[_DB_PERSISTED_MARKER] = True  # what the commit stamps on the live handoff
         msgs = msgs + _next_batch(rnd + 1)
+    files = [p for p in (home / "cache" / "pruned").iterdir() if not p.name.endswith(".index.jsonl")]
+    assert len(rows) == len(files)  # every archive has a row
+
+
+def _next_batch(start, n=24, chars=12_000):
+    rows = _transcript(n, chars)[2:-2]
+    for row in rows:  # fresh call ids so each batch archives new files
+        for call in row.get("tool_calls") or ():
+            call["id"] = f"b{start}_{call['id']}"
+        if row.get("tool_call_id"):
+            row["tool_call_id"] = f"b{start}_{row['tool_call_id']}"
+    return rows + [{"role": "assistant", "content": f"batch {start} read"}, {"role": "user", "content": f"go on {start}"}]
 
 
 def test_an_unstored_handoff_in_the_protected_head_keeps_its_archives_listed():
