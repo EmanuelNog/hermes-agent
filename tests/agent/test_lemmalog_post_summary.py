@@ -99,3 +99,22 @@ def test_empty_summary_or_session_is_a_noop(house, monkeypatch):
     bridge.maybe_capture_after_summary([{"role": "user", "content": "u"}], "  ", session_id="s1", model="m")
     bridge.maybe_capture_after_summary([{"role": "user", "content": "u"}], "s", session_id="", model="m")
     assert "argv" not in seen
+
+
+def test_instruction_is_generated_from_the_sweep_on_first_use(house, monkeypatch):
+    """No file at first compaction is fine: ask the sweep once, cache 0600, never touch the
+    summarizer's own request."""
+    script = house / "scripts" / "lemmalog-sweep.sh"
+    script.write_text("#!/bin/sh\necho 'EXTRACTION-INSTRUCTION'\n")
+    script.chmod(0o755)
+    monkeypatch.delenv("LEMMALOG_MCP_PATH", raising=False)
+    text = bridge.instruction_text()
+    assert text == "EXTRACTION-INSTRUCTION"
+    cached = house / "lemmalog" / "post-summary-instruction.txt"
+    assert cached.exists() and stat.S_IMODE(os.stat(cached).st_mode) == 0o600
+    assert bridge.instruction_text() == "EXTRACTION-INSTRUCTION"
+
+
+def test_instruction_is_empty_when_the_sweep_has_nothing_to_say(house, monkeypatch):
+    monkeypatch.delenv("LEMMALOG_MCP_PATH", raising=False)
+    assert bridge.instruction_text() == ""

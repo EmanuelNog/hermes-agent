@@ -59,9 +59,39 @@ def instruction_path(home: Path | None = None) -> Path:
 
 
 def instruction_text(home: Path | None = None) -> str:
+    """The extraction instruction, generated from the sweep on first use and cached.
+
+    Only the SECOND call reads this; the summarizer's request never contains it. Missing file is
+    not an error: ask the sweep for it once, cache 0600, and skip extraction if even that fails.
+    """
+    path = instruction_path(home)
     try:
-        return instruction_path(home).read_text().strip()
+        text = path.read_text().strip()
+        if text:
+            return text
     except OSError:
+        pass
+    script = script_path(home)
+    if not script.is_file():
+        return ""
+    try:
+        out = subprocess.run(
+            [str(script), "--print-post-summary-instruction"],
+            capture_output=True, text=True, timeout=20, check=True,
+        )
+        text = (out.stdout or "").strip()
+        if text:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, text.encode("utf-8"))
+            finally:
+                os.close(fd)
+            os.replace(tmp, path)
+        return text
+    except Exception:  # health: allow BLE001 -- extraction is optional, compaction is not
+        logger.debug("lemmalog post-summary: could not generate the instruction", exc_info=True)
         return ""
 
 
