@@ -7,6 +7,7 @@ import contextvars
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 import re
 import time
@@ -3551,18 +3552,38 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 with aux_interrupt_protection():
                     response = call_llm(**call_kwargs)
             text = extract_content_or_reasoning(response, max_reasoning_chars=4000).strip()
-            raw_usage = getattr(response, "usage", None)
-            if raw_usage is None and isinstance(response, dict):
-                raw_usage = response.get("usage")
-            if hasattr(raw_usage, "model_dump"):
-                usage = raw_usage.model_dump()
-            elif isinstance(raw_usage, dict):
-                usage = dict(raw_usage)
-            else:
-                usage = {}
+            def _usage_dict(resp):
+                raw = getattr(resp, "usage", None)
+                if raw is None and isinstance(resp, dict):
+                    raw = resp.get("usage")
+                if hasattr(raw, "model_dump"):
+                    return raw.model_dump()
+                return dict(raw) if isinstance(raw, dict) else {}
+
+            usage = _usage_dict(response)
+            review_reply, review_usage = "", {}
+            # Second pass (opt-in, LEMMALOG_REVIEW=1): another reviewer turn on the SAME root
+            # prefix (summarizer messages + summary), branching at its own instruction. Cache
+            # parity is the point: both turns read the prefix the summarizer just warmed.
+            from agent.lemmalog_post_summary import review_instruction_text
+
+            if os.environ.get("LEMMALOG_REVIEW", "").strip().lower() in ("1", "on", "yes", "true"):
+                rinstr = review_instruction_text()
+                if rinstr and text:
+                    rfollow = list(messages) + [
+                        {"role": "assistant", "content": summary},
+                        {"role": "user", "content": rinstr + "\n\nFACTS\n" + text},
+                    ]
+                    rkwargs, _ = self._compression_call_kwargs(rfollow)
+                    with accounting_scope(getattr(self, "_session_db", None), getattr(self, "_session_id", "")):
+                        with aux_interrupt_protection():
+                            rresponse = call_llm(**rkwargs)
+                    review_reply = extract_content_or_reasoning(rresponse, max_reasoning_chars=4000).strip()
+                    review_usage = _usage_dict(rresponse)
             maybe_capture_after_summary(
                 messages, summary, session_id=getattr(self, "_session_id", "") or "",
                 model=self.summary_model or self.model, reply=text, usage=usage,
+                review_reply=review_reply, review_usage=review_usage,
             )
         except Exception:  # health: allow BLE001 -- extraction must never fail a compaction
             logger.debug("lemmalog post-summary extraction turn failed", exc_info=True)

@@ -95,6 +95,43 @@ def instruction_text(home: Path | None = None) -> str:
         return ""
 
 
+def review_instruction_path(home: Path | None = None) -> Path:
+    return instruction_path(home).with_name("post-summary-review-instruction.txt")
+
+
+def review_instruction_text(home: Path | None = None) -> str:
+    """Static reviewer instruction, generated from the sweep once and cached 0600."""
+    path = review_instruction_path(home)
+    try:
+        text = path.read_text().strip()
+        if text:
+            return text
+    except OSError:
+        pass
+    script = script_path(home)
+    if not script.is_file():
+        return ""
+    try:
+        out = subprocess.run(
+            [str(script), "--print-review-instruction"],
+            capture_output=True, text=True, timeout=20, check=True,
+        )
+        text = (out.stdout or "").strip()
+        if text:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, text.encode("utf-8"))
+            finally:
+                os.close(fd)
+            os.replace(tmp, path)
+        return text
+    except Exception:  # health: allow BLE001 -- the review pass is optional
+        logger.debug("lemmalog review: could not generate the instruction", exc_info=True)
+        return ""
+
+
 def payload_path(session_id: str, home: Path | None = None) -> Path:
     if home is None:
         from hermes_constants import get_hermes_home
@@ -125,6 +162,8 @@ def maybe_capture_after_summary(
     ts: Optional[list[int]] = None,
     reply: str = "",
     usage: Optional[dict] = None,
+    review_reply: str = "",
+    review_usage: Optional[dict] = None,
 ) -> Optional[Path]:
     """Write the second-turn payload and spawn the extractor; ``None`` when the switch is off."""
     if not enabled() or not (summary or "").strip() or not session_id:
@@ -148,6 +187,8 @@ def maybe_capture_after_summary(
             "ts": list(ts or []),
             "reply": reply,
             "usage": usage or {},
+            "review_reply": review_reply,
+            "review_usage": review_usage or {},
             "captured_at": time.time(),
         }
         path = payload_path(session_id)
