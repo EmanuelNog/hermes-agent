@@ -11,9 +11,14 @@ def resolve_launch_route(params: dict, config: dict) -> dict:
     Same owner as HermesCLI / oneshot / the TUI factory: ``resolve_startup_model_route``. A plain
     model id (no alias, no qualifier) is returned untouched; explicit ``--base-url``/``--api-key``
     launches already carry their route.
+
+    A ``--provider`` pick with no ``-m`` is the mirror case, decided here too: the pick supplies its
+    own model instead of inheriting the profile default's (:func:`_bind_provider_default`).
     """
     model = params.get('model')
-    if not isinstance(model, str) or not model.strip() or 'base_url' in params or 'api_key' in params:
+    if not isinstance(model, str) or not model.strip():
+        return _bind_provider_default(params, config)
+    if 'base_url' in params or 'api_key' in params:
         return params
     from hermes_cli.model_switch import resolve_startup_model_route
     model_cfg = config.get('model')
@@ -36,3 +41,45 @@ def resolve_launch_route(params: dict, config: dict) -> dict:
         # An alias key is a launch key: authority memory only, revoked by restart (bind_launch_key).
         resolved['api_key'] = route.api_key
     return resolved
+
+
+def _picked_provider(params: dict) -> str:
+    """The provider a create picked, or ``''`` for none / ``auto`` — the thin client's "no pick"."""
+    provider = params.get('provider')
+    if not isinstance(provider, str):
+        return ''
+    provider = provider.strip()
+    return '' if provider.lower() == 'auto' else provider
+
+
+def _provider_default_model(provider: str, config: dict) -> str:
+    """The model *provider* serves by default: its own entry's ``default_model``, else its catalog's."""
+    from hermes_cli.runtime_provider_custom import _get_named_custom_provider
+    entry = _get_named_custom_provider(provider, config=config, resolve_credentials=False)
+    if entry is not None:  # a configured named endpoint: its ``default_model`` arrives as ``model``
+        return str(entry.get('model') or '').strip()
+    from hermes_cli.models import get_default_model_for_provider
+    return str(get_default_model_for_provider(provider) or '').strip()
+
+
+def _bind_provider_default(params: dict, config: dict) -> dict:
+    """A ``--provider`` pick with no ``-m`` takes that provider's own default model.
+
+    Left unset, the create froze the PROFILE's default model against the picked provider: the runtime
+    then found no such model on the new endpoint and quietly sent the turn to the profile's own
+    provider (measured 2026-11-28 — ``--provider pc2-inkling`` answered from the cloud while the local
+    box slept). A pick that resolves to the profile's own route keeps the profile's model, and a pick
+    nothing can supply a default for is refused here rather than silently ignored.
+    """
+    provider = _picked_provider(params)
+    if not provider or 'base_url' in params or 'api_key' in params:
+        return params
+    from gateway.session_policy import _keeps_profile_route
+    if _keeps_profile_route(provider, config):
+        return params
+    model = _provider_default_model(provider, config)
+    if not model:
+        from persistence.core.errors import AuthorityRefusal
+        raise AuthorityRefusal('invalid_params', field='provider',
+                               detail=f'{provider} serves no default model; name one with -m/--model')
+    return dict(params, model=model)
