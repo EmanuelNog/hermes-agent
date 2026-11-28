@@ -393,7 +393,7 @@ class PluginContext(PluginCapabilityCtxMixin, PluginIdleTaskCtxMixin):
             return True
         try:
             from hermes_cli.config import load_config
-            with _facade()._plugin_home_scope(self._manager.home_path):
+            with _facade()._plugin_home_scope(self._manager.owner_home):
                 cfg = load_config() or {}
         except Exception:
             return False  # fail closed: better to break the override than silently grant it
@@ -428,6 +428,12 @@ class PluginContext(PluginCapabilityCtxMixin, PluginIdleTaskCtxMixin):
         Under ``plugins.isolation: host`` this runs in the gateway, in the calling hook's context."""
         from hermes_cli.plugin_session import turn_client
         return turn_client()
+
+    def turn_origin(self) -> str | None:
+        """The Hermes producer of the running turn (``plugin_session.turn_origin``).
+        Under ``plugins.isolation: host`` this runs in the gateway, in the calling hook's context."""
+        from hermes_cli.plugin_session import turn_origin
+        return turn_origin()
 
     def session_viewers(self) -> list[dict]:
         """The clients attached to the calling session (``plugin_session.session_viewers``).
@@ -474,7 +480,7 @@ class PluginContext(PluginCapabilityCtxMixin, PluginIdleTaskCtxMixin):
         """Return whether this plugin may trigger gateway session turns (read from the plugin's
         own profile config, never the calling thread's ambient home)."""
         try:
-            with _facade()._plugin_home_scope(self._manager.home_path):
+            with _facade()._plugin_home_scope(self._manager.owner_home):
                 cfg = _facade().load_config_readonly() or {}
         except Exception:
             return False

@@ -44,24 +44,33 @@ def _profile_channel_overrides(home: Path, platform: Platform):
     ``platform_section`` picks (a top-level ``<platform>:`` block first) wins for the overrides and
     the platform keys it sets. ``GatewayConfig.from_dict(raw)`` alone reads only the nested form."""
     from gateway.config import GatewayConfig, PlatformConfig
-    from gateway.config_loader import merge_platform_sections, platform_section
+    from gateway.config_loader import merge_platform_sections, platform_section, with_yaml_fallback
     from gateway.run import _load_gateway_config
-    raw = _load_gateway_config(home / "config.yaml")
-    name, gateway_section = str(platform.value), raw.get("gateway")
-    merged = merge_platform_sections(raw, gateway_section, {}).get(name) or {}
-    overrides, extra = merged.get("channel_overrides"), PlatformConfig.from_dict(merged).extra
-    section, toplevel = platform_section(raw, name, (
-        gateway_section.get("platforms") if isinstance(gateway_section, dict) else None))
-    if isinstance(section, dict) and isinstance(section.get("channel_overrides"), dict):
-        overrides = section["channel_overrides"]
-    if toplevel and isinstance(section, dict):
-        # A root block's keys win, except over what the user authored under ``platforms.<p>.extra``.
-        authored = merged.get("extra")
-        extra = {**extra, **PlatformConfig.from_dict(section).extra,
-                 **(authored if isinstance(authored, dict) else {})}
-    return GatewayConfig.from_dict({"platforms": {name: {
-        "channel_overrides": overrides if isinstance(overrides, dict) else {},
-        "allow_silence": extra.get("allow_silence")}}})
+    name = str(platform.value)
+
+    def only(overrides: Any, allow_silence: Any) -> GatewayConfig:
+        return GatewayConfig.from_dict({"platforms": {name: {
+            "channel_overrides": overrides if isinstance(overrides, dict) else {},
+            "allow_silence": allow_silence}}})
+
+    def read() -> GatewayConfig:
+        raw = _load_gateway_config(home / "config.yaml")
+        gateway_section = raw.get("gateway")
+        merged = merge_platform_sections(raw, gateway_section, {}).get(name) or {}
+        overrides, extra = merged.get("channel_overrides"), PlatformConfig.from_dict(merged).extra
+        section, toplevel = platform_section(raw, name, (
+            gateway_section.get("platforms") if isinstance(gateway_section, dict) else None))
+        if isinstance(section, dict) and isinstance(section.get("channel_overrides"), dict):
+            overrides = section["channel_overrides"]
+        if toplevel and isinstance(section, dict):
+            # A root block's keys win, except over what the user authored under ``platforms.<p>.extra``.
+            authored = merged.get("extra")
+            extra = {**extra, **PlatformConfig.from_dict(section).extra,
+                     **(authored if isinstance(authored, dict) else {})}
+        return only(overrides, extra.get("allow_silence"))
+
+    # That profile's own gateway load drops a config.yaml it cannot process, overrides included.
+    return with_yaml_fallback(home, read, lambda: only(None, None))
 
 
 DEFAULT_HUMAN_DELAY_RANGE_MS: tuple[int, int] = (800, 2500)
@@ -188,6 +197,21 @@ class GatewayConfigLoadersMixin:
         if not config:
             return None
         return _get_channel_override(config, platform, chat_id, thread_id=thread_id, parent_id=parent_id)
+
+    def _idle_compact_after_for_source(self, source: SessionSource, user_config: dict) -> int:
+        """``compression.idle_compact_after_seconds`` for *source*'s chat: the first ``channel_overrides``
+        entry along chat -> thread -> parent that sets it (0 = off in that channel), else the global
+        value from the turn's *user_config*. A channel policy, so it outlives ``/new``."""
+        override = self._channel_override(source.platform, source.chat_id or "", source.thread_id,
+                                          source.parent_chat_id, source)
+        value = getattr(override, "idle_compact_after_seconds", None)
+        if value is not None:
+            return value
+        configured = cfg_get(user_config or {}, "compression", "idle_compact_after_seconds", default=0)
+        try:
+            return max(0, int(configured or 0))
+        except (TypeError, ValueError):
+            return 0
 
     def _serving_channel_config(self, source: SessionSource, *, unbound_reads_home: bool = False):
         """The config whose ``channel_overrides`` serve *source*.
